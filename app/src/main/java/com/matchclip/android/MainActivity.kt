@@ -49,24 +49,14 @@ class MainActivity : Activity() {
     private var lastPreviewRotation = -1
     private lateinit var startButton: Button
     private lateinit var markButton: Button
-    private lateinit var scoreboard: TextView
     private lateinit var health: TextView
     private lateinit var lockButton: Button
     private var beforeSeconds = 15
     private var afterSeconds = 5
-    private var home = "HOME"
-    private var away = "AWAY"
-    private var homeGoals = 0
-    private var awayGoals = 0
-    private var half = 1
-    private var clockStarted = 0L
-    private var clockAccumulated = 0L
-    private var clockRunning = false
     private var locked = false
     private val uiHandler = Handler(Looper.getMainLooper())
     private val ticker = object : Runnable {
         override fun run() {
-            if (::scoreboard.isInitialized) updateScoreboard()
             if (::health.isInitialized) updateHealth()
             uiHandler.postDelayed(this, 1000)
         }
@@ -101,8 +91,6 @@ class MainActivity : Activity() {
         val prefs = getSharedPreferences("matchclip", MODE_PRIVATE)
         beforeSeconds = prefs.getInt("before", 15).coerceIn(5, 45)
         afterSeconds = prefs.getInt("after", 5).coerceIn(0, 20)
-        home = prefs.getString("home", "HOME") ?: "HOME"
-        away = prefs.getString("away", "AWAY") ?: "AWAY"
         cameraThread.start()
         handler = Handler(cameraThread.looper)
         manager = getSystemService(CAMERA_SERVICE) as CameraManager
@@ -165,14 +153,6 @@ class MainActivity : Activity() {
         previewContainer.addView(liveTag, FrameLayout.LayoutParams(-2, -2,
             Gravity.TOP or Gravity.LEFT).apply { setMargins(dp(12), dp(12), 0, 0) })
 
-        scoreboard = TextView(this).apply {
-            setTextColor(Color.WHITE); textSize = 15f
-            setPadding(dp(10), dp(7), dp(10), dp(7))
-            background = rounded(Color.rgb(37, 48, 66), 10f)
-        }
-        previewContainer.addView(scoreboard, FrameLayout.LayoutParams(-2, -2,
-            Gravity.TOP or Gravity.CENTER_HORIZONTAL).apply { topMargin = dp(12) })
-        updateScoreboard()
         settingsButton = action("⚙ Settings", Color.rgb(55, 72, 96))
         previewContainer.addView(settingsButton, FrameLayout.LayoutParams(dp(122), dp(46),
             Gravity.TOP or Gravity.RIGHT).apply { setMargins(0, dp(12), dp(12), 0) })
@@ -227,9 +207,6 @@ class MainActivity : Activity() {
         afterSeek.setOnSeekBarChangeListener(seek { afterSeconds = it
             afterText.text = "After: $afterSeconds seconds"
             prefs.edit().putInt("after", afterSeconds).apply() })
-        val matchButton = action("Teams / Score / Clock", Color.rgb(55, 72, 96))
-        bottom.addView(matchButton, LinearLayout.LayoutParams(-1, dp(44)))
-        matchButton.setOnClickListener { if (!locked) showMatchControls() }
         previewContainer.addView(bottom, FrameLayout.LayoutParams(dp(330), -2,
             Gravity.TOP or Gravity.RIGHT).apply { setMargins(0, dp(65), dp(12), 0) })
         settingsButton.setOnClickListener {
@@ -282,14 +259,6 @@ class MainActivity : Activity() {
             Gravity.BOTTOM or Gravity.LEFT).apply {
                 setMargins(dp(12), 0, 0, dp(14))
             })
-        val tags = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
-        arrayOf("Goal", "Shot", "Save", "Tackle", "Other").forEach { tag ->
-            val button = action(tag, Color.rgb(55, 72, 96))
-            tags.addView(button, LinearLayout.LayoutParams(0, dp(40), 1f))
-            button.setOnClickListener { if (!locked) markHighlight(tag) }
-        }
-        previewContainer.addView(tags, FrameLayout.LayoutParams(dp(470), dp(40),
-            Gravity.BOTTOM or Gravity.CENTER_HORIZONTAL).apply { bottomMargin = dp(76) })
         health = TextView(this).apply {
             setTextColor(Color.WHITE); textSize = 11f
             setPadding(dp(10), dp(5), dp(10), dp(5))
@@ -609,14 +578,6 @@ class MainActivity : Activity() {
         override fun onStopTrackingTouch(bar: SeekBar?) {}
     }
 
-    private fun updateScoreboard() {
-        val elapsed = clockAccumulated +
-            if (clockRunning) SystemClock.elapsedRealtime() - clockStarted else 0L
-        val seconds = elapsed / 1000
-        scoreboard.text = "$home $homeGoals - $awayGoals $away  •  ${half}H %02d:%02d".format(
-            seconds / 60, seconds % 60)
-    }
-
     private fun updateHealth() {
         val battery = registerReceiver(null, IntentFilter(Intent.ACTION_BATTERY_CHANGED))
         val level = battery?.getIntExtra(BatteryManager.EXTRA_LEVEL, -1) ?: -1
@@ -626,43 +587,6 @@ class MainActivity : Activity() {
             (1024.0 * 1024.0 * 1024.0)
         health.text = "Battery ${if (pct < 0) "?" else "$pct%"}  •  ${"%.1f".format(free)} GB free"
         health.setTextColor(if (pct in 0..15 || free < 1.0) Color.YELLOW else Color.WHITE)
-    }
-
-    private fun showMatchControls() {
-        val items = arrayOf("Set team names", "Home goal +1", "Away goal +1",
-            "Home goal -1", "Away goal -1", if (clockRunning) "Pause clock" else "Start clock",
-            "Next half / reset clock", "Reset score")
-        android.app.AlertDialog.Builder(this).setTitle("Match controls")
-            .setItems(items) { _, choice ->
-                when (choice) {
-                    0 -> {
-                        val fields = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
-                        val h = EditText(this).apply { hint = "Home team"; setText(home); setSingleLine() }
-                        val a = EditText(this).apply { hint = "Away team"; setText(away); setSingleLine() }
-                        fields.addView(h); fields.addView(a)
-                        android.app.AlertDialog.Builder(this).setTitle("Teams").setView(fields)
-                            .setPositiveButton("Save") { _, _ ->
-                                home = h.text.toString().trim().ifEmpty { "HOME" }.take(24)
-                                away = a.text.toString().trim().ifEmpty { "AWAY" }.take(24)
-                                getSharedPreferences("matchclip", MODE_PRIVATE).edit()
-                                    .putString("home", home).putString("away", away).apply()
-                                updateScoreboard()
-                            }.setNegativeButton("Cancel", null).show()
-                    }
-                    1 -> homeGoals++
-                    2 -> awayGoals++
-                    3 -> homeGoals = (homeGoals - 1).coerceAtLeast(0)
-                    4 -> awayGoals = (awayGoals - 1).coerceAtLeast(0)
-                    5 -> {
-                        if (clockRunning) clockAccumulated += SystemClock.elapsedRealtime() - clockStarted
-                        else clockStarted = SystemClock.elapsedRealtime()
-                        clockRunning = !clockRunning
-                    }
-                    6 -> { half = if (half == 1) 2 else 1; clockAccumulated = 0; clockRunning = false }
-                    7 -> { homeGoals = 0; awayGoals = 0 }
-                }
-                updateScoreboard()
-            }.show()
     }
 
     private fun displayDegrees(): Int = when (windowManager.defaultDisplay.rotation) {
