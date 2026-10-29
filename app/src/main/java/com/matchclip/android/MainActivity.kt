@@ -458,22 +458,28 @@ class MainActivity : Activity() {
 
     private fun updatePreview() {
         if (!::preview.isInitialized || !preview.isAvailable) return
-        val w = preview.width.toFloat()
-        val h = preview.height.toFloat()
-        if (w <= 0 || h <= 0) return
-        val rotation = (sensorDegrees - displayDegrees() + 360) % 360
-        val rotated = rotation == 90 || rotation == 270
-        val bufferW = if (rotated) 720f else 1280f
-        val bufferH = if (rotated) 1280f else 720f
-        val scale = maxOf(w / bufferW, h / bufferH)
-        val matrix = Matrix()
-        val dst = RectF(0f, 0f, bufferW * scale, bufferH * scale)
-        dst.offset((w - dst.width()) / 2, (h - dst.height()) / 2)
-        matrix.setRectToRect(RectF(0f, 0f, w, h), dst, Matrix.ScaleToFit.FILL)
-        // TextureView's transform must rotate the buffer into display coordinates.
-        // The previous sign was reversed, giving an upside-down/sideways preview.
-        if (rotated) matrix.postRotate(if (rotation == 90) 90f else -90f, w / 2, h / 2)
-        preview.setTransform(matrix)
+        val width = preview.width.toFloat()
+        val height = preview.height.toFloat()
+        if (width <= 0f || height <= 0f) return
+
+        // Camera2 outputs landscape sensor buffers. Rotate the preview according
+        // to the sensor orientation AND the current display orientation.
+        // Compute the transform from the actual 1280x720 buffer dimensions,
+        // not from dimensions already swapped for rotation.
+        val degrees = (sensorDegrees - displayDegrees() + 360) % 360
+        val centerX = width / 2f
+        val centerY = height / 2f
+        val rotated = degrees == 90 || degrees == 270
+        val orientedWidth = if (rotated) 720f else 1280f
+        val orientedHeight = if (rotated) 1280f else 720f
+        val scale = maxOf(width / orientedWidth, height / orientedHeight)
+
+        val transform = Matrix()
+        // TextureView coordinates cover the view; normalize to the buffer size.
+        transform.postScale(1280f / width, 720f / height, centerX, centerY)
+        transform.postRotate(degrees.toFloat(), centerX, centerY)
+        transform.postScale(scale * width / 1280f, scale * height / 720f, centerX, centerY)
+        preview.setTransform(transform)
     }
 
     override fun onConfigurationChanged(newConfig: Configuration) {
