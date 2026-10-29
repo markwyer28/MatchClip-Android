@@ -30,15 +30,13 @@ class MainActivity : Activity() {
     private lateinit var exposureLabel: TextView
     private var exposureValue = 0
     private lateinit var zoom: SeekBar
-    private lateinit var torch: Button
-    private var torchOn = false
     private var zoomValue = 1f
     private var activeBuilder: CaptureRequest.Builder? = null
     private var cameraId: String? = null
     private var sensorDegrees = 90
     private var frontFacing = false
     private var clipOrientation = 90
-    private var rotationAdjustment = 0
+    private var rotationAdjustment = 270
     private lateinit var rotateButton: Button
     private lateinit var startButton: Button
     private lateinit var markButton: Button
@@ -138,10 +136,8 @@ class MainActivity : Activity() {
         cameraRow.addView(caption("CAMERA", 12f), LinearLayout.LayoutParams(76, -2))
         lenses = Spinner(this)
         cameraRow.addView(lenses, LinearLayout.LayoutParams(0, 48, 1f))
-        torch = action("Torch off", Color.rgb(55, 72, 96))
-        cameraRow.addView(torch, LinearLayout.LayoutParams(112, 46))
         bottom.addView(cameraRow)
-        rotateButton = action("↻ Rotate preview", Color.rgb(55, 72, 96))
+        rotateButton = action("↻ Rotate preview · 270°", Color.rgb(55, 72, 96))
         bottom.addView(rotateButton, LinearLayout.LayoutParams(-1, dp(40)))
         val zoomRow = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = android.view.Gravity.CENTER_VERTICAL }
         zoomRow.addView(caption("ZOOM", 12f), LinearLayout.LayoutParams(76, -2))
@@ -184,7 +180,6 @@ class MainActivity : Activity() {
             rotateButton.text = "↻ Rotate preview · $rotationAdjustment°"
             updatePreview()
         }
-        torch.setOnClickListener { torchOn = !torchOn; torch.text = if (torchOn) "Torch on" else "Torch off"; applyControls() }
         zoom.setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
             override fun onProgressChanged(view: SeekBar?, value: Int, fromUser: Boolean) {
                 if (!fromUser) return
@@ -270,12 +265,7 @@ class MainActivity : Activity() {
         val characteristics = manager.getCameraCharacteristics(id)
         sensorDegrees = characteristics.get(CameraCharacteristics.SENSOR_ORIENTATION) ?: 90
         frontFacing = characteristics.get(CameraCharacteristics.LENS_FACING) == CameraCharacteristics.LENS_FACING_FRONT
-        torchOn = false
-        runOnUiThread {
-            torch.text = "Torch off"
-            torch.isEnabled = characteristics.get(CameraCharacteristics.FLASH_INFO_AVAILABLE) == true
-            zoom.progress = 0
-        }
+        runOnUiThread { zoom.progress = 0 }
         zoomValue = characteristics.get(CameraCharacteristics.CONTROL_ZOOM_RATIO_RANGE)?.lower ?: 1f
         updatePreview()
         val generation = cameraGeneration
@@ -580,9 +570,6 @@ class MainActivity : Activity() {
                         else exposureValue * -compensation.lower / 12f
                     builder.set(CaptureRequest.CONTROL_AE_EXPOSURE_COMPENSATION,
                         steps.toInt().coerceIn(compensation.lower, compensation.upper))
-                }
-                if (characteristics.get(CameraCharacteristics.FLASH_INFO_AVAILABLE) == true) {
-                    builder.set(CaptureRequest.FLASH_MODE, if (torchOn) CaptureRequest.FLASH_MODE_TORCH else CaptureRequest.FLASH_MODE_OFF)
                 }
                 active.setRepeatingRequest(builder.build(), null, handler)
             } catch (e: Exception) { message("Control error: " + e.message) }
