@@ -27,7 +27,7 @@ class MainActivity : Activity() {
     private lateinit var headerView: LinearLayout
     private lateinit var controlsPanel: LinearLayout
     private lateinit var status: TextView
-    private lateinit var lenses: Spinner
+    private lateinit var settingsButton: Button
     private lateinit var zoomLabel: TextView
     private lateinit var exposure: SeekBar
     private lateinit var exposureLabel: TextView
@@ -38,10 +38,9 @@ class MainActivity : Activity() {
     private var cameraId: String? = null
     private var sensorDegrees = 90
     private var frontFacing = false
-    private var clipOrientation = 90
-    private var rotationAdjustment = 270
+    private var clipOrientation = 0
+    private var rotationAdjustment = 0
     private var lastPreviewRotation = -1
-    private lateinit var rotateButton: Button
     private lateinit var startButton: Button
     private lateinit var markButton: Button
     private val cameraThread = HandlerThread("CameraThread")
@@ -111,84 +110,106 @@ class MainActivity : Activity() {
             insets
         }
         root.requestApplyInsets()
-        val header = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(8, 2, 8, 10) }
-        header.addView(TextView(this).apply {
-            text = "MATCHCLIP"; textSize = 22f; setTextColor(Color.WHITE)
-            setTypeface(null, android.graphics.Typeface.BOLD); letterSpacing = 0.09f
-        })
-        header.addView(caption("FOOTBALL HIGHLIGHT CAMERA  •  15s BEFORE / 5s AFTER", 11f))
-        root.addView(header)
+        // Landscape-only camera screen. The controls float over the video,
+        // leaving the maximum possible area for the full 16:9 frame.
+        val header = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
         headerView = header
-        previewContainer = FrameLayout(this)
-        val previewFrame = android.widget.FrameLayout(this).apply { background = rounded(Color.BLACK, 18f) }
+        previewContainer = FrameLayout(this).apply { setBackgroundColor(Color.BLACK) }
+        val previewFrame = FrameLayout(this).apply { setBackgroundColor(Color.BLACK) }
         preview = TextureView(this)
-        previewFrame.addView(preview, android.widget.FrameLayout.LayoutParams(-1, -1))
-        val liveTag = TextView(this).apply {
-            text = "●  PREVIEW"; textSize = 12f; setTextColor(Color.WHITE)
-            setPadding(16, 10, 16, 10); background = rounded(Color.rgb(37, 48, 66), 10f)
-        }
-        previewFrame.addView(liveTag, android.widget.FrameLayout.LayoutParams(-2, -2, android.view.Gravity.TOP or android.view.Gravity.LEFT).apply {
-            setMargins(12, 12, 0, 0)
-        })
+        previewFrame.addView(preview, FrameLayout.LayoutParams(-1, -1))
         previewContainer.addView(previewFrame, FrameLayout.LayoutParams(-1, -1, Gravity.CENTER))
         root.addView(previewContainer, LinearLayout.LayoutParams(-1, 0, 1f))
-        previewContainer.addOnLayoutChangeListener { _, _, _, _, _, _, _, _, _ -> preview.post { updatePreview() } }
+        previewContainer.addOnLayoutChangeListener { _, _, _, _, _, _, _, _, _ ->
+            preview.post { updatePreview() }
+        }
+
+        val liveTag = TextView(this).apply {
+            text = "MATCHCLIP  •  16:9"; textSize = 12f
+            setTextColor(Color.WHITE); setPadding(dp(12), dp(8), dp(12), dp(8))
+            background = rounded(Color.rgb(37, 48, 66), 10f)
+        }
+        previewContainer.addView(liveTag, FrameLayout.LayoutParams(-2, -2,
+            Gravity.TOP or Gravity.LEFT).apply { setMargins(dp(12), dp(12), 0, 0) })
+
+        settingsButton = action("⚙ Settings", Color.rgb(55, 72, 96))
+        previewContainer.addView(settingsButton, FrameLayout.LayoutParams(dp(122), dp(46),
+            Gravity.TOP or Gravity.RIGHT).apply { setMargins(0, dp(12), dp(12), 0) })
+
         val bottom = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL; setPadding(14, 10, 14, 12)
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(12), dp(10), dp(12), dp(10))
             background = rounded(panel)
+            visibility = View.GONE
         }
-        val cameraRow = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = android.view.Gravity.CENTER_VERTICAL }
-        cameraRow.addView(caption("CAMERA", 12f), LinearLayout.LayoutParams(76, -2))
-        lenses = Spinner(this)
-        cameraRow.addView(lenses, LinearLayout.LayoutParams(0, 48, 1f))
-        bottom.addView(cameraRow)
-        rotateButton = action("↻ Rotate preview · 270°", Color.rgb(55, 72, 96))
-        bottom.addView(rotateButton, LinearLayout.LayoutParams(-1, dp(40)))
-        val zoomRow = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = android.view.Gravity.CENTER_VERTICAL }
-        zoomRow.addView(caption("ZOOM", 12f), LinearLayout.LayoutParams(76, -2))
-        zoom = SeekBar(this).apply { max = 100; progress = 0; progressTintList = android.content.res.ColorStateList.valueOf(accent) }
-        zoomRow.addView(zoom, LinearLayout.LayoutParams(0, 48, 1f))
-        zoomLabel = TextView(this).apply { text = "1.0×"; setTextColor(Color.WHITE); textSize = 15f; gravity = android.view.Gravity.CENTER }
-        zoomRow.addView(zoomLabel, LinearLayout.LayoutParams(68, -2))
-        bottom.addView(zoomRow)
-        val exposureRow = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = android.view.Gravity.CENTER_VERTICAL }
-        exposureRow.addView(caption("LIGHT", 12f), LinearLayout.LayoutParams(76, -2))
-        exposure = SeekBar(this).apply { max = 24; progress = 12; progressTintList = android.content.res.ColorStateList.valueOf(accent) }
-        exposureRow.addView(exposure, LinearLayout.LayoutParams(0, 48, 1f))
-        exposureLabel = TextView(this).apply { text = "0"; setTextColor(Color.WHITE); textSize = 15f; gravity = android.view.Gravity.CENTER }
-        exposureRow.addView(exposureLabel, LinearLayout.LayoutParams(68, -2))
-        bottom.addView(exposureRow)
-        val actions = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; setPadding(0, 8, 0, 8) }
-        startButton = action("●  Start", Color.rgb(51, 111, 157))
-        markButton = action("★  SAVE HIGHLIGHT", accent).apply { isEnabled = false }
-        actions.addView(startButton, LinearLayout.LayoutParams(0, 58, 1f).apply { rightMargin = 10 })
-        actions.addView(markButton, LinearLayout.LayoutParams(0, 58, 2f))
-        bottom.addView(actions)
-        status = TextView(this).apply {
-            text = "Ready · Choose a camera, then press Start"
-            textSize = 12f; setTextColor(muted); gravity = android.view.Gravity.CENTER
-            setPadding(4, 4, 4, 0)
-        }
-        bottom.addView(status)
-        root.addView(bottom)
-        mainRoot = root
         controlsPanel = bottom
+        val zoomRow = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL
+        }
+        zoomRow.addView(caption("ZOOM", 12f), LinearLayout.LayoutParams(dp(55), -2))
+        zoom = SeekBar(this).apply {
+            max = 100; progress = 0
+            progressTintList = android.content.res.ColorStateList.valueOf(accent)
+        }
+        zoomRow.addView(zoom, LinearLayout.LayoutParams(0, dp(44), 1f))
+        zoomLabel = TextView(this).apply {
+            text = "1.0×"; setTextColor(Color.WHITE); textSize = 15f
+            gravity = Gravity.CENTER
+        }
+        zoomRow.addView(zoomLabel, LinearLayout.LayoutParams(dp(55), -2))
+        bottom.addView(zoomRow)
+
+        val exposureRow = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL
+        }
+        exposureRow.addView(caption("LIGHT", 12f), LinearLayout.LayoutParams(dp(55), -2))
+        exposure = SeekBar(this).apply {
+            max = 24; progress = 12
+            progressTintList = android.content.res.ColorStateList.valueOf(accent)
+        }
+        exposureRow.addView(exposure, LinearLayout.LayoutParams(0, dp(44), 1f))
+        exposureLabel = TextView(this).apply {
+            text = "0"; setTextColor(Color.WHITE); textSize = 15f; gravity = Gravity.CENTER
+        }
+        exposureRow.addView(exposureLabel, LinearLayout.LayoutParams(dp(55), -2))
+        bottom.addView(exposureRow)
+        bottom.addView(caption("HIGHLIGHTS  •  15 seconds before / 5 seconds after", 12f))
+        previewContainer.addView(bottom, FrameLayout.LayoutParams(dp(330), -2,
+            Gravity.TOP or Gravity.RIGHT).apply { setMargins(0, dp(65), dp(12), 0) })
+        settingsButton.setOnClickListener {
+            bottom.visibility = if (bottom.visibility == View.VISIBLE) View.GONE else View.VISIBLE
+            settingsButton.text = if (bottom.visibility == View.VISIBLE) "✕ Close" else "⚙ Settings"
+        }
+
+        val actions = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL
+        }
+        startButton = action("● Start", Color.rgb(51, 111, 157))
+        markButton = action("★ SAVE HIGHLIGHT", accent).apply { isEnabled = false }
+        actions.addView(startButton, LinearLayout.LayoutParams(dp(125), dp(54)))
+        actions.addView(markButton, LinearLayout.LayoutParams(dp(220), dp(54)).apply {
+            leftMargin = dp(10)
+        })
+        previewContainer.addView(actions, FrameLayout.LayoutParams(-2, -2,
+            Gravity.BOTTOM or Gravity.CENTER_HORIZONTAL).apply {
+                bottomMargin = dp(14)
+            })
+        status = TextView(this).apply {
+            text = "Live preview · frame the pitch, then Start"
+            textSize = 12f; setTextColor(Color.WHITE); gravity = Gravity.CENTER
+            setPadding(dp(10), dp(5), dp(10), dp(5))
+            background = rounded(Color.rgb(37, 48, 66), 10f)
+        }
+        previewContainer.addView(status, FrameLayout.LayoutParams(-2, -2,
+            Gravity.BOTTOM or Gravity.LEFT).apply {
+                setMargins(dp(12), 0, 0, dp(14))
+            })
+        mainRoot = root
         setContentView(root)
-        applyOrientationLayout()
-        startButton.setOnClickListener { if (running.get()) stopRecording() else startRecording() }
-        lenses.onItemSelectedListener = object : android.widget.AdapterView.OnItemSelectedListener {
-            override fun onItemSelected(parent: android.widget.AdapterView<*>?, view: View?, position: Int, id: Long) {
-                if (!running.get() && preview.isAvailable) openPreviewCamera()
-            }
-            override fun onNothingSelected(parent: android.widget.AdapterView<*>?) {}
+        startButton.setOnClickListener {
+            if (running.get()) stopRecording() else startRecording()
         }
         markButton.setOnClickListener { markHighlight() }
-        rotateButton.setOnClickListener {
-            if (running.get()) return@setOnClickListener
-            rotationAdjustment = (rotationAdjustment + 90) % 360
-            rotateButton.text = "↻ Rotate preview · $rotationAdjustment°"
-            updatePreview()
-        }
         zoom.setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
             override fun onProgressChanged(view: SeekBar?, value: Int, fromUser: Boolean) {
                 if (!fromUser) return
@@ -232,23 +253,12 @@ class MainActivity : Activity() {
     private fun listCameras() {
         if (checkSelfPermission(Manifest.permission.CAMERA) != PackageManager.PERMISSION_GRANTED) return
         cameraIds = manager.cameraIdList.filter {
-            val facing = manager.getCameraCharacteristics(it).get(CameraCharacteristics.LENS_FACING)
-            facing == CameraCharacteristics.LENS_FACING_BACK ||
-                facing == CameraCharacteristics.LENS_FACING_FRONT
+            manager.getCameraCharacteristics(it).get(CameraCharacteristics.LENS_FACING) ==
+                CameraCharacteristics.LENS_FACING_BACK
         }.sortedWith(compareBy<String> {
-            if (manager.getCameraCharacteristics(it).get(CameraCharacteristics.LENS_FACING) ==
-                CameraCharacteristics.LENS_FACING_BACK) 0 else 1
-        }.thenBy {
-            manager.getCameraCharacteristics(it).get(CameraCharacteristics.LENS_INFO_AVAILABLE_FOCAL_LENGTHS)?.minOrNull() ?: 100f
-        })
-        val names = cameraIds.mapIndexed { index, id ->
-            val characteristics = manager.getCameraCharacteristics(id)
-            val focal = characteristics.get(CameraCharacteristics.LENS_INFO_AVAILABLE_FOCAL_LENGTHS)?.minOrNull()
-            val facing = characteristics.get(CameraCharacteristics.LENS_FACING)
-            val label = if (facing == CameraCharacteristics.LENS_FACING_FRONT) "Front / selfie" else "Rear camera"
-            "$label · ${focal ?: "?"} mm · ID $id"
-        }
-        runOnUiThread { lenses.adapter = ArrayAdapter(this, android.R.layout.simple_spinner_dropdown_item, names) }
+            // Prefer the standard rear camera (Pixel 6 logical camera ID 0).
+            if (it == "0") 0 else 1
+        }.thenBy { it })
     }
 
     private fun closeCameraPreview() {
@@ -267,7 +277,7 @@ class MainActivity : Activity() {
     private fun openPreviewCamera() {
         if (running.get() || openingCamera || switchingSession || !preview.isAvailable || cameraIds.isEmpty()) return
         if (checkSelfPermission(Manifest.permission.CAMERA) != PackageManager.PERMISSION_GRANTED) return
-        val id = cameraIds[lenses.selectedItemPosition.coerceIn(cameraIds.indices)]
+        val id = cameraIds.first()
         if (cameraId == id && camera != null && session != null) return
         closeCameraPreview()
         cameraId = id
@@ -369,7 +379,7 @@ class MainActivity : Activity() {
             sensorDegrees = characteristics.get(CameraCharacteristics.SENSOR_ORIENTATION) ?: 90
             frontFacing = characteristics.get(CameraCharacteristics.LENS_FACING) == CameraCharacteristics.LENS_FACING_FRONT
             // The MP4 orientation and preview must agree at recording start.
-            clipOrientation = calculatedPreviewDegrees()
+            clipOrientation = 0
             updatePreview()
             if (camera != null && cameraId == id) {
                 createCameraSession(record = true)
@@ -393,8 +403,6 @@ class MainActivity : Activity() {
             }
             startButton.text = "■  Stop"
             markButton.isEnabled = true
-            lenses.isEnabled = false
-            rotateButton.isEnabled = false
         } catch (e: Exception) { message("Start failed: ${e.message}"); stopRecording() }
     }
 
@@ -485,7 +493,7 @@ class MainActivity : Activity() {
 
     private fun stopRecording() {
         if (!running.getAndSet(false)) return
-        runOnUiThread { markButton.isEnabled = false; startButton.text = "●  Start"; lenses.isEnabled = true; rotateButton.isEnabled = true }
+        runOnUiThread { markButton.isEnabled = false; startButton.text = "● Start" }
         try { session?.close() } catch (_: Exception) {}
         session = null; activeBuilder = null
         try { drainThread?.join(1500) } catch (_: Exception) {}
@@ -506,84 +514,19 @@ class MainActivity : Activity() {
         else -> 0
     }
 
-    private fun applyOrientationLayout() {
-        if (!::mainRoot.isInitialized) return
-        val landscape = resources.configuration.orientation == Configuration.ORIENTATION_LANDSCAPE
-        mainRoot.orientation = if (landscape) LinearLayout.HORIZONTAL else LinearLayout.VERTICAL
-        headerView.visibility = if (landscape) View.GONE else View.VISIBLE
-        mainRoot.removeView(previewContainer)
-        mainRoot.removeView(controlsPanel)
-        if (landscape) {
-            mainRoot.addView(previewContainer, LinearLayout.LayoutParams(0, -1, 1f))
-            mainRoot.addView(controlsPanel, LinearLayout.LayoutParams(
-                (resources.displayMetrics.density * 220f).toInt(), -1))
-            controlsPanel.setPadding(8, 2, 8, 2)
-        } else {
-            mainRoot.addView(previewContainer, LinearLayout.LayoutParams(-1, 0, 1f))
-            mainRoot.addView(controlsPanel, LinearLayout.LayoutParams(-1, -2))
-            controlsPanel.setPadding(14, 10, 14, 12)
-        }
-        previewContainer.requestLayout()
-        previewContainer.post { updatePreview() }
-    }
-
-    private fun calculatedPreviewDegrees(): Int {
-        val base = if (frontFacing) (sensorDegrees + displayDegrees()) % 360
-                   else (sensorDegrees - displayDegrees() + 360) % 360
-        return (base + rotationAdjustment) % 360
-    }
+    private fun calculatedPreviewDegrees(): Int = 0
 
     private fun updatePreview() {
         if (!::preview.isInitialized || !preview.isAvailable) return
-        // During recording, the MP4 orientation is fixed. Keep the live
-        // preview aligned with that saved orientation even if the UI rotates.
-        val degrees = if (running.get()) clipOrientation else calculatedPreviewDegrees()
-        val rotated = degrees == 90 || degrees == 270
-        val holderW = previewContainer.width
-        val holderH = previewContainer.height
-        if (holderW <= 0 || holderH <= 0) return
-        val aspect = if (rotated) 9f / 16f else 16f / 9f
-        val fitW = minOf(holderW.toFloat(), holderH * aspect).toInt().coerceAtLeast(1)
-        val fitH = minOf(holderH.toFloat(), holderW / aspect).toInt().coerceAtLeast(1)
-        val frame = preview.parent as FrameLayout
-        val lp = frame.layoutParams as FrameLayout.LayoutParams
-        if (lp.width != fitW || lp.height != fitH) {
-            lp.width = fitW
-            lp.height = fitH
-            lp.gravity = Gravity.CENTER
-            frame.layoutParams = lp
-            preview.post { updatePreview() }
-            return
-        }
         val w = preview.width.toFloat()
         val h = preview.height.toFloat()
         if (w <= 0f || h <= 0f) return
-        val sourceW = 1280f
-        val sourceH = 720f
-        val orientedW = if (rotated) sourceH else sourceW
-        val orientedH = if (rotated) sourceW else sourceH
-        val scale = minOf(w / orientedW, h / orientedH)
-        val cx = w / 2f
-        val cy = h / 2f
+        // Both camera surfaces receive the same 1280x720 buffer. Keep the
+        // TextureView at 16:9 with no rotation or crop, so it matches the MP4.
+        val scale = minOf(w / 1280f, h / 720f)
         val transform = Matrix()
-        transform.setScale(sourceW / w, sourceH / h, cx, cy)
-        transform.postRotate(degrees.toFloat(), cx, cy)
-        transform.postScale(scale, scale, cx, cy)
-        if (frontFacing) transform.postScale(-1f, 1f, cx, cy)
+        transform.setScale(1280f * scale / w, 720f * scale / h, w / 2f, h / 2f)
         preview.setTransform(transform)
-    }
-
-    override fun onConfigurationChanged(newConfig: Configuration) {
-        super.onConfigurationChanged(newConfig)
-        // Configuration callbacks can run before the new portrait dimensions
-        // have been measured. Reset the old landscape transform and wait for
-        // the view hierarchy to finish its new layout before fitting again.
-        preview.setTransform(Matrix())
-        applyOrientationLayout()
-        previewContainer.requestLayout()
-        previewContainer.post {
-            preview.post { updatePreview() }
-        }
     }
 
     private fun applyControls() {
