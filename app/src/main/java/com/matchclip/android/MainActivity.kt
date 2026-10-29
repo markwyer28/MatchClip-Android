@@ -522,7 +522,7 @@ class MainActivity : Activity() {
         val h = preview.height.toFloat()
         if (w <= 0f || h <= 0f) return
 
-        // Rotate the rear-camera live view by 90 degrees, while fitting the
+        // Rotate the rear-camera live view by 270 degrees, while fitting the
         // entire image inside the available preview without cropping.
         val sourceW = 1280f
         val sourceH = 720f
@@ -531,7 +531,7 @@ class MainActivity : Activity() {
         val cy = h / 2f
         val transform = Matrix()
         transform.setScale(sourceW / w, sourceH / h, cx, cy)
-        transform.postRotate(90f, cx, cy)
+        transform.postRotate(270f, cx, cy)
         transform.postScale(scale, scale, cx, cy)
         preview.setTransform(transform)
     }
