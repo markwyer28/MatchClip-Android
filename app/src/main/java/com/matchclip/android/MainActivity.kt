@@ -3,6 +3,12 @@ package com.matchclip.android
 import android.Manifest
 import android.app.Activity
 import android.content.ContentValues
+import android.content.Intent
+import android.content.IntentFilter
+import android.os.BatteryManager
+import android.os.Environment
+import android.os.StatFs
+import android.os.SystemClock
 import android.content.pm.PackageManager
 import android.graphics.SurfaceTexture
 import android.graphics.Matrix
@@ -43,6 +49,28 @@ class MainActivity : Activity() {
     private var lastPreviewRotation = -1
     private lateinit var startButton: Button
     private lateinit var markButton: Button
+    private lateinit var scoreboard: TextView
+    private lateinit var health: TextView
+    private lateinit var lockButton: Button
+    private var beforeSeconds = 15
+    private var afterSeconds = 5
+    private var home = "HOME"
+    private var away = "AWAY"
+    private var homeGoals = 0
+    private var awayGoals = 0
+    private var half = 1
+    private var clockStarted = 0L
+    private var clockAccumulated = 0L
+    private var clockRunning = false
+    private var locked = false
+    private val uiHandler = Handler(Looper.getMainLooper())
+    private val ticker = object : Runnable {
+        override fun run() {
+            if (::scoreboard.isInitialized) updateScoreboard()
+            if (::health.isInitialized) updateHealth()
+            uiHandler.postDelayed(this, 1000)
+        }
+    }
     private val cameraThread = HandlerThread("CameraThread")
     private lateinit var handler: Handler
     private lateinit var manager: CameraManager
@@ -65,11 +93,16 @@ class MainActivity : Activity() {
     private var drainThread: Thread? = null
     private var cameraIds = listOf<String>()
     data class Sample(val bytes: ByteArray, val pts: Long, val flags: Int)
-    data class Highlight(val target: Long, val number: Int)
+    data class Highlight(val target: Long, val number: Int, val before: Int, val after: Int, val tag: String)
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+        val prefs = getSharedPreferences("matchclip", MODE_PRIVATE)
+        beforeSeconds = prefs.getInt("before", 15).coerceIn(5, 45)
+        afterSeconds = prefs.getInt("after", 5).coerceIn(0, 20)
+        home = prefs.getString("home", "HOME") ?: "HOME"
+        away = prefs.getString("away", "AWAY") ?: "AWAY"
         cameraThread.start()
         handler = Handler(cameraThread.looper)
         manager = getSystemService(CAMERA_SERVICE) as CameraManager
@@ -132,6 +165,14 @@ class MainActivity : Activity() {
         previewContainer.addView(liveTag, FrameLayout.LayoutParams(-2, -2,
             Gravity.TOP or Gravity.LEFT).apply { setMargins(dp(12), dp(12), 0, 0) })
 
+        scoreboard = TextView(this).apply {
+            setTextColor(Color.WHITE); textSize = 15f
+            setPadding(dp(10), dp(7), dp(10), dp(7))
+            background = rounded(Color.rgb(37, 48, 66), 10f)
+        }
+        previewContainer.addView(scoreboard, FrameLayout.LayoutParams(-2, -2,
+            Gravity.TOP or Gravity.CENTER_HORIZONTAL).apply { topMargin = dp(12) })
+        updateScoreboard()
         settingsButton = action("⚙ Settings", Color.rgb(55, 72, 96))
         previewContainer.addView(settingsButton, FrameLayout.LayoutParams(dp(122), dp(46),
             Gravity.TOP or Gravity.RIGHT).apply { setMargins(0, dp(12), dp(12), 0) })
@@ -173,7 +214,22 @@ class MainActivity : Activity() {
         }
         exposureRow.addView(exposureLabel, LinearLayout.LayoutParams(dp(55), -2))
         bottom.addView(exposureRow)
-        bottom.addView(caption("HIGHLIGHTS  •  15 seconds before / 5 seconds after", 12f))
+        val beforeText = caption("Before: $beforeSeconds seconds")
+        val beforeSeek = SeekBar(this).apply { max = 40; progress = beforeSeconds - 5 }
+        val afterText = caption("After: $afterSeconds seconds")
+        val afterSeek = SeekBar(this).apply { max = 20; progress = afterSeconds }
+        bottom.addView(caption("HIGHLIGHT DURATION", 12f))
+        bottom.addView(beforeText); bottom.addView(beforeSeek)
+        bottom.addView(afterText); bottom.addView(afterSeek)
+        beforeSeek.setOnSeekBarChangeListener(seek { beforeSeconds = it + 5
+            beforeText.text = "Before: $beforeSeconds seconds"
+            prefs.edit().putInt("before", beforeSeconds).apply() })
+        afterSeek.setOnSeekBarChangeListener(seek { afterSeconds = it
+            afterText.text = "After: $afterSeconds seconds"
+            prefs.edit().putInt("after", afterSeconds).apply() })
+        val matchButton = action("Teams / Score / Clock", Color.rgb(55, 72, 96))
+        bottom.addView(matchButton, LinearLayout.LayoutParams(-1, dp(44)))
+        matchButton.setOnClickListener { if (!locked) showMatchControls() }
         previewContainer.addView(bottom, FrameLayout.LayoutParams(dp(330), -2,
             Gravity.TOP or Gravity.RIGHT).apply { setMargins(0, dp(65), dp(12), 0) })
         settingsButton.setOnClickListener {
@@ -190,6 +246,28 @@ class MainActivity : Activity() {
         actions.addView(markButton, LinearLayout.LayoutParams(dp(220), dp(54)).apply {
             leftMargin = dp(10)
         })
+        lockButton = action("🔓 Lock", Color.rgb(55, 72, 96))
+        previewContainer.addView(lockButton, FrameLayout.LayoutParams(dp(105), dp(42),
+            Gravity.BOTTOM or Gravity.RIGHT).apply { rightMargin = dp(12); bottomMargin = dp(14) })
+        lockButton.setOnClickListener {
+            if (!locked) {
+                locked = true
+                settingsButton.isEnabled = false
+                startButton.isEnabled = false
+                markButton.isEnabled = false
+                bottom.visibility = View.GONE
+                lockButton.text = "🔒 Hold"
+                message("Locked · long-press lock to unlock")
+            }
+        }
+        lockButton.setOnLongClickListener {
+            locked = false
+            settingsButton.isEnabled = true
+            startButton.isEnabled = true
+            markButton.isEnabled = running.get()
+            lockButton.text = "🔓 Lock"
+            true
+        }
         previewContainer.addView(actions, FrameLayout.LayoutParams(-2, -2,
             Gravity.BOTTOM or Gravity.CENTER_HORIZONTAL).apply {
                 bottomMargin = dp(14)
@@ -204,6 +282,22 @@ class MainActivity : Activity() {
             Gravity.BOTTOM or Gravity.LEFT).apply {
                 setMargins(dp(12), 0, 0, dp(14))
             })
+        val tags = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
+        arrayOf("Goal", "Shot", "Save", "Tackle", "Other").forEach { tag ->
+            val button = action(tag, Color.rgb(55, 72, 96))
+            tags.addView(button, LinearLayout.LayoutParams(0, dp(40), 1f))
+            button.setOnClickListener { if (!locked) markHighlight(tag) }
+        }
+        previewContainer.addView(tags, FrameLayout.LayoutParams(dp(470), dp(40),
+            Gravity.BOTTOM or Gravity.CENTER_HORIZONTAL).apply { bottomMargin = dp(76) })
+        health = TextView(this).apply {
+            setTextColor(Color.WHITE); textSize = 11f
+            setPadding(dp(10), dp(5), dp(10), dp(5))
+            background = rounded(Color.rgb(37, 48, 66), 10f)
+        }
+        previewContainer.addView(health, FrameLayout.LayoutParams(-2, -2,
+            Gravity.TOP or Gravity.LEFT).apply { leftMargin = dp(12); topMargin = dp(56) })
+        uiHandler.post(ticker)
         mainRoot = root
         setContentView(root)
         startButton.setOnClickListener {
@@ -424,8 +518,8 @@ class MainActivity : Activity() {
                             if (firstPts < 0) firstPts = info.presentationTimeUs
                             latestPts = info.presentationTimeUs
                             samples.addLast(Sample(bytes, latestPts, info.flags))
-                            while (samples.size > 1 && latestPts - samples.first.pts > 23_000_000L) samples.removeFirst()
-                            val ready = pending.filter { latestPts >= it.target + 5_000_000L }
+                            while (samples.size > 1 && latestPts - samples.first.pts > 53_000_000L) samples.removeFirst()
+                            val ready = pending.filter { latestPts >= it.target + it.after * 1_000_000L }
                             ready.forEach { highlight ->
                                 val fmt = outputFormat
                                 if (fmt != null) saveHighlight(samples.toList(), fmt, highlight)
@@ -439,28 +533,30 @@ class MainActivity : Activity() {
         } catch (e: Exception) { message("Encoder failed: ${e.message}") }
     }
 
-    private fun markHighlight() {
+    private fun markHighlight(tag: String = "Highlight") {
         if (!running.get()) return
         synchronized(guard) {
-            if (firstPts < 0 || latestPts - firstPts < 16_000_000L) { message("Buffer warming up · wait 16 seconds"); return }
-            val h = Highlight(latestPts, ++sequence)
+            if (firstPts < 0 || latestPts - firstPts < beforeSeconds * 1_000_000L) {
+                message("Buffer warming up · wait $beforeSeconds seconds"); return
+            }
+            val h = Highlight(latestPts, ++sequence, beforeSeconds, afterSeconds, tag)
             pending.add(h)
-            message("Highlight ${h.number} marked; saving after 5 seconds")
+            message("$tag ${h.number} marked; saving after ${h.after} seconds")
         }
     }
 
     private fun saveHighlight(snapshot: List<Sample>, fmt: MediaFormat, h: Highlight) {
         Thread({
             try {
-                val targetStart = h.target - 15_000_000L
+                val targetStart = h.target - h.before * 1_000_000L
                 val keyframe = snapshot.indexOfLast { it.pts <= targetStart && (it.flags and MediaCodec.BUFFER_FLAG_KEY_FRAME) != 0 }
                 val fallback = snapshot.indexOfFirst { (it.flags and MediaCodec.BUFFER_FLAG_KEY_FRAME) != 0 }
                 val startIndex = if (keyframe >= 0) keyframe else fallback
                 if (startIndex < 0) throw IllegalStateException("No sync frame")
-                val segment = snapshot.drop(startIndex).takeWhile { it.pts <= h.target + 5_000_000L }
+                val segment = snapshot.drop(startIndex).takeWhile { it.pts <= h.target + h.after * 1_000_000L }
                 if (segment.isEmpty()) throw IllegalStateException("Empty clip")
                 val values = ContentValues().apply {
-                    put(MediaStore.Video.Media.DISPLAY_NAME, "MatchClip_${System.currentTimeMillis()}_${h.number}.mp4")
+                    put(MediaStore.Video.Media.DISPLAY_NAME, "MatchClip_${h.tag}_${System.currentTimeMillis()}_${h.number}.mp4")
                     put(MediaStore.Video.Media.MIME_TYPE, "video/mp4")
                     put(MediaStore.Video.Media.RELATIVE_PATH, "Movies/MatchClip")
                     put(MediaStore.Video.Media.IS_PENDING, 1)
@@ -500,12 +596,74 @@ class MainActivity : Activity() {
         try { encoder?.stop(); encoder?.release(); encoderSurface?.release() } catch (_: Exception) {}
         encoder = null; encoderSurface = null
         val lost = synchronized(guard) { val n = pending.size; pending.clear(); n }
-        message(if (lost > 0) "Stopped; $lost pending clips lost. Wait 5 seconds after tagging." else "Stopped · clips in Movies/MatchClip")
+        message(if (lost > 0) "Stopped; $lost pending clips lost. Wait for saving to finish." else "Stopped · clips in Movies/MatchClip")
         preview.post { if (preview.isAvailable) {
             if (camera != null) createCameraSession(record = false) else openPreviewCamera()
         } }
     }
 
+
+    private fun seek(change: (Int) -> Unit) = object : SeekBar.OnSeekBarChangeListener {
+        override fun onProgressChanged(bar: SeekBar?, value: Int, user: Boolean) { if (user) change(value) }
+        override fun onStartTrackingTouch(bar: SeekBar?) {}
+        override fun onStopTrackingTouch(bar: SeekBar?) {}
+    }
+
+    private fun updateScoreboard() {
+        val elapsed = clockAccumulated +
+            if (clockRunning) SystemClock.elapsedRealtime() - clockStarted else 0L
+        val seconds = elapsed / 1000
+        scoreboard.text = "$home $homeGoals - $awayGoals $away  •  ${half}H %02d:%02d".format(
+            seconds / 60, seconds % 60)
+    }
+
+    private fun updateHealth() {
+        val battery = registerReceiver(null, IntentFilter(Intent.ACTION_BATTERY_CHANGED))
+        val level = battery?.getIntExtra(BatteryManager.EXTRA_LEVEL, -1) ?: -1
+        val scale = battery?.getIntExtra(BatteryManager.EXTRA_SCALE, 100) ?: 100
+        val pct = if (level >= 0 && scale > 0) level * 100 / scale else -1
+        val free = StatFs(Environment.getExternalStorageDirectory().absolutePath).availableBytes /
+            (1024.0 * 1024.0 * 1024.0)
+        health.text = "Battery ${if (pct < 0) "?" else "$pct%"}  •  ${"%.1f".format(free)} GB free"
+        health.setTextColor(if (pct in 0..15 || free < 1.0) Color.YELLOW else Color.WHITE)
+    }
+
+    private fun showMatchControls() {
+        val items = arrayOf("Set team names", "Home goal +1", "Away goal +1",
+            "Home goal -1", "Away goal -1", if (clockRunning) "Pause clock" else "Start clock",
+            "Next half / reset clock", "Reset score")
+        android.app.AlertDialog.Builder(this).setTitle("Match controls")
+            .setItems(items) { _, choice ->
+                when (choice) {
+                    0 -> {
+                        val fields = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+                        val h = EditText(this).apply { hint = "Home team"; setText(home); setSingleLine() }
+                        val a = EditText(this).apply { hint = "Away team"; setText(away); setSingleLine() }
+                        fields.addView(h); fields.addView(a)
+                        android.app.AlertDialog.Builder(this).setTitle("Teams").setView(fields)
+                            .setPositiveButton("Save") { _, _ ->
+                                home = h.text.toString().trim().ifEmpty { "HOME" }.take(24)
+                                away = a.text.toString().trim().ifEmpty { "AWAY" }.take(24)
+                                getSharedPreferences("matchclip", MODE_PRIVATE).edit()
+                                    .putString("home", home).putString("away", away).apply()
+                                updateScoreboard()
+                            }.setNegativeButton("Cancel", null).show()
+                    }
+                    1 -> homeGoals++
+                    2 -> awayGoals++
+                    3 -> homeGoals = (homeGoals - 1).coerceAtLeast(0)
+                    4 -> awayGoals = (awayGoals - 1).coerceAtLeast(0)
+                    5 -> {
+                        if (clockRunning) clockAccumulated += SystemClock.elapsedRealtime() - clockStarted
+                        else clockStarted = SystemClock.elapsedRealtime()
+                        clockRunning = !clockRunning
+                    }
+                    6 -> { half = if (half == 1) 2 else 1; clockAccumulated = 0; clockRunning = false }
+                    7 -> { homeGoals = 0; awayGoals = 0 }
+                }
+                updateScoreboard()
+            }.show()
+    }
 
     private fun displayDegrees(): Int = when (windowManager.defaultDisplay.rotation) {
         Surface.ROTATION_90 -> 90
@@ -586,5 +744,5 @@ class MainActivity : Activity() {
         }
         return super.onKeyDown(keyCode, event)
     }
-    override fun onDestroy() { stopRecording(); closeCameraPreview(); cameraThread.quitSafely(); super.onDestroy() }
+    override fun onDestroy() { uiHandler.removeCallbacks(ticker); stopRecording(); closeCameraPreview(); cameraThread.quitSafely(); super.onDestroy() }
 }
