@@ -37,6 +37,8 @@ class MainActivity : Activity() {
     private var sensorDegrees = 90
     private var frontFacing = false
     private var clipOrientation = 90
+    private var rotationAdjustment = 0
+    private lateinit var rotateButton: Button
     private lateinit var startButton: Button
     private lateinit var markButton: Button
     private val cameraThread = HandlerThread("CameraThread")
@@ -135,6 +137,8 @@ class MainActivity : Activity() {
         torch = action("Torch off", Color.rgb(55, 72, 96))
         cameraRow.addView(torch, LinearLayout.LayoutParams(112, 46))
         bottom.addView(cameraRow)
+        rotateButton = action("↻ Rotate preview", Color.rgb(55, 72, 96))
+        bottom.addView(rotateButton, LinearLayout.LayoutParams(-1, dp(40)))
         val zoomRow = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = android.view.Gravity.CENTER_VERTICAL }
         zoomRow.addView(caption("ZOOM", 12f), LinearLayout.LayoutParams(76, -2))
         zoom = SeekBar(this).apply { max = 100; progress = 0; progressTintList = android.content.res.ColorStateList.valueOf(accent) }
@@ -171,6 +175,11 @@ class MainActivity : Activity() {
             override fun onNothingSelected(parent: android.widget.AdapterView<*>?) {}
         }
         markButton.setOnClickListener { markHighlight() }
+        rotateButton.setOnClickListener {
+            rotationAdjustment = (rotationAdjustment + 90) % 360
+            rotateButton.text = "↻ Rotate preview · $rotationAdjustment°"
+            updatePreview()
+        }
         torch.setOnClickListener { torchOn = !torchOn; torch.text = if (torchOn) "Torch on" else "Torch off"; applyControls() }
         zoom.setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
             override fun onProgressChanged(view: SeekBar?, value: Int, fromUser: Boolean) {
@@ -297,6 +306,7 @@ class MainActivity : Activity() {
         session = null
         try { previewSurface?.release() } catch (_: Exception) {}
         texture.setDefaultBufferSize(1280, 720)
+        preview.post { updatePreview() }
         val display = Surface(texture)
         previewSurface = display
         val surfaces = mutableListOf(display)
@@ -494,28 +504,24 @@ class MainActivity : Activity() {
 
     private fun updatePreview() {
         if (!::preview.isInitialized || !preview.isAvailable) return
-        val width = preview.width.toFloat()
-        val height = preview.height.toFloat()
-        if (width <= 0f || height <= 0f) return
-
-        // Camera2 outputs landscape sensor buffers. Rotate the preview according
-        // to the sensor orientation AND the current display orientation.
-        // Compute the transform from the actual 1280x720 buffer dimensions,
-        // not from dimensions already swapped for rotation.
-        val degrees = if (frontFacing) (sensorDegrees + displayDegrees()) % 360 else (sensorDegrees - displayDegrees() + 360) % 360
-        val centerX = width / 2f
-        val centerY = height / 2f
+        val w = preview.width.toFloat()
+        val h = preview.height.toFloat()
+        if (w <= 0f || h <= 0f) return
+        val base = if (frontFacing) (sensorDegrees + displayDegrees()) % 360
+                   else (sensorDegrees - displayDegrees() + 360) % 360
+        val degrees = (base + rotationAdjustment) % 360
         val rotated = degrees == 90 || degrees == 270
-        val orientedWidth = if (rotated) 720f else 1280f
-        val orientedHeight = if (rotated) 1280f else 720f
-        val scale = maxOf(width / orientedWidth, height / orientedHeight)
-
+        val bw = 1280f
+        val bh = 720f
+        val orientedW = if (rotated) bh else bw
+        val orientedH = if (rotated) bw else bh
+        val scale = maxOf(w / orientedW, h / orientedH)
+        val cx = w / 2f
+        val cy = h / 2f
         val transform = Matrix()
-        // TextureView coordinates cover the view; normalize to the buffer size.
-        transform.postScale(1280f / width, 720f / height, centerX, centerY)
-        transform.postRotate(degrees.toFloat(), centerX, centerY)
-        transform.postScale(scale * width / 1280f, scale * height / 720f, centerX, centerY)
-        if (frontFacing) transform.postScale(-1f, 1f, centerX, centerY)
+        transform.setScale(bw * scale / w, bh * scale / h, cx, cy)
+        transform.postRotate(degrees.toFloat(), cx, cy)
+        if (frontFacing) transform.postScale(-1f, 1f, cx, cy)
         preview.setTransform(transform)
     }
 
