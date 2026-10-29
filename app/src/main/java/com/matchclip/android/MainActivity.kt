@@ -540,9 +540,19 @@ class MainActivity : Activity() {
             return
         }
 
-        // With a 16:9 TextureView and 1280x720 camera output, identity
-        // mapping gives an uncropped, unstretched recording-matched preview.
-        preview.setTransform(Matrix())
+        // The Pixel 6 preview arrives 90 degrees anticlockwise in this
+        // landscape configuration. Correct the live TextureView clockwise,
+        // without touching the encoder surface or MP4 orientation metadata.
+        // Keep the 16:9 viewport: compensate for the swapped dimensions.
+        val w = preview.width.toFloat()
+        val h = preview.height.toFloat()
+        if (w <= 0f || h <= 0f) return
+        val cx = w / 2f
+        val cy = h / 2f
+        val transform = Matrix()
+        transform.setRotate(90f, cx, cy)
+        transform.postScale(w / h, h / w, cx, cy)
+        preview.setTransform(transform)
     }
 
     private fun applyControls() {
