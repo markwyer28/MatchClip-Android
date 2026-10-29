@@ -522,12 +522,11 @@ class MainActivity : Activity() {
         val h = preview.height.toFloat()
         if (w <= 0f || h <= 0f) return
 
-        // Fill the entire landscape viewport with the requested 270-degree
-        // camera rotation. This is centre-crop: unlike fit-centre it removes
-        // the large black bars, at the cost of trimming frame edges.
+        // Preserve the full camera frame without centre-cropping.
+        // The 270-degree preview rotation is retained.
         val sourceW = 1280f
         val sourceH = 720f
-        val scale = maxOf(w / sourceH, h / sourceW)
+        val scale = minOf(w / sourceH, h / sourceW)
         val cx = w / 2f
         val cy = h / 2f
         val transform = Matrix()
