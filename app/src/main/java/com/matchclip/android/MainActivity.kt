@@ -518,22 +518,31 @@ class MainActivity : Activity() {
 
     private fun updatePreview() {
         if (!::preview.isInitialized || !preview.isAvailable) return
-        val w = preview.width.toFloat()
-        val h = preview.height.toFloat()
-        if (w <= 0f || h <= 0f) return
+        val holderW = previewContainer.width
+        val holderH = previewContainer.height
+        if (holderW <= 0 || holderH <= 0) return
 
-        // Preserve the full camera frame without centre-cropping.
-        // The 270-degree preview rotation is retained.
-        val sourceW = 1280f
-        val sourceH = 720f
-        val scale = minOf(w / sourceH, h / sourceW)
-        val cx = w / 2f
-        val cy = h / 2f
-        val transform = Matrix()
-        transform.setScale(sourceW / w, sourceH / h, cx, cy)
-        transform.postRotate(270f, cx, cy)
-        transform.postScale(scale, scale, cx, cy)
-        preview.setTransform(transform)
+        // The camera feeds identical 1280x720 buffers to the TextureView and
+        // H.264 encoder. Do not rotate the preview independently: doing so
+        // displays a portrait-shaped image that cannot match the 16:9 MP4.
+        // Fit a true 16:9 viewport into the available landscape space.
+        val aspect = 16f / 9f
+        val fittedW = minOf(holderW.toFloat(), holderH * aspect).toInt().coerceAtLeast(1)
+        val fittedH = minOf(holderH.toFloat(), holderW / aspect).toInt().coerceAtLeast(1)
+        val frame = preview.parent as FrameLayout
+        val params = frame.layoutParams as FrameLayout.LayoutParams
+        if (params.width != fittedW || params.height != fittedH) {
+            params.width = fittedW
+            params.height = fittedH
+            params.gravity = Gravity.CENTER
+            frame.layoutParams = params
+            preview.post { updatePreview() }
+            return
+        }
+
+        // With a 16:9 TextureView and 1280x720 camera output, identity
+        // mapping gives an uncropped, unstretched recording-matched preview.
+        preview.setTransform(Matrix())
     }
 
     private fun applyControls() {
