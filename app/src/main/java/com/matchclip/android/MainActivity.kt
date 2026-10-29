@@ -129,6 +129,7 @@ class MainActivity : Activity() {
         })
         previewContainer.addView(previewFrame, FrameLayout.LayoutParams(-1, -1, Gravity.CENTER))
         root.addView(previewContainer, LinearLayout.LayoutParams(-1, 0, 1f))
+        previewContainer.addOnLayoutChangeListener { _, _, _, _, _, _, _, _, _ -> updatePreview() }
         val bottom = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL; setPadding(14, 10, 14, 12)
             background = rounded(panel)
@@ -518,6 +519,23 @@ class MainActivity : Activity() {
                    else (sensorDegrees - displayDegrees() + 360) % 360
         val degrees = (base + rotationAdjustment) % 360
         val rotated = degrees == 90 || degrees == 270
+        val holderW = previewContainer.width
+        val holderH = previewContainer.height
+        if (holderW > 0 && holderH > 0) {
+            val ratio = if (rotated) 9f / 16f else 16f / 9f
+            val fittedW = minOf(holderW.toFloat(), holderH * ratio).toInt().coerceAtLeast(1)
+            val fittedH = minOf(holderH.toFloat(), holderW / ratio).toInt().coerceAtLeast(1)
+            val frame = preview.parent as FrameLayout
+            val params = frame.layoutParams as FrameLayout.LayoutParams
+            if (params.width != fittedW || params.height != fittedH) {
+                params.width = fittedW
+                params.height = fittedH
+                params.gravity = Gravity.CENTER
+                frame.layoutParams = params
+                preview.post { updatePreview() }
+                return
+            }
+        }
         val frameW = if (rotated) 720f else 1280f
         val frameH = if (rotated) 1280f else 720f
         val fitScale = minOf(w / frameW, h / frameH)
