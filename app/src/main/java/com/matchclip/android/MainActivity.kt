@@ -538,7 +538,12 @@ class MainActivity : Activity() {
                    else (sensorDegrees - displayDegrees() + 360) % 360
         // Respect the user's manual 90-degree rotation in every orientation.
         // The previous landscape/portrait coercion cancelled button presses.
-        val degrees = (base + rotationAdjustment) % 360
+        // In landscape the sensor already tracks the rotated display. Apply
+        // an extra quarter turn so the default 270-degree correction does not
+        // force a narrow portrait-shaped viewport in a wide screen.
+        // The manual rotation button remains additive and fully functional.
+        val landscape = resources.configuration.orientation == Configuration.ORIENTATION_LANDSCAPE
+        val degrees = (base + rotationAdjustment + if (landscape) 90 else 0) % 360
         lastPreviewRotation = degrees
         val rotated = degrees == 90 || degrees == 270
         val holderW = previewContainer.width
