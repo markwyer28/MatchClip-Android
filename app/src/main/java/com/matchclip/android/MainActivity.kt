@@ -7,6 +7,8 @@ import android.content.pm.PackageManager
 import android.graphics.SurfaceTexture
 import android.graphics.Matrix
 import android.graphics.RectF
+import android.graphics.Color
+import android.graphics.drawable.GradientDrawable
 import android.content.res.Configuration
 import android.hardware.camera2.*
 import android.media.*
@@ -22,6 +24,10 @@ class MainActivity : Activity() {
     private lateinit var preview: TextureView
     private lateinit var status: TextView
     private lateinit var lenses: Spinner
+    private lateinit var zoomLabel: TextView
+    private lateinit var exposure: SeekBar
+    private lateinit var exposureLabel: TextView
+    private var exposureValue = 0
     private lateinit var zoom: SeekBar
     private lateinit var torch: Button
     private var torchOn = false
@@ -58,30 +64,87 @@ class MainActivity : Activity() {
         cameraThread.start()
         handler = Handler(cameraThread.looper)
         manager = getSystemService(CAMERA_SERVICE) as CameraManager
-        val layout = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
-        val controls = LinearLayout(this)
+        window.statusBarColor = Color.rgb(12, 20, 35)
+        window.navigationBarColor = Color.rgb(12, 20, 35)
+        val navy = Color.rgb(12, 20, 35)
+        val panel = Color.rgb(24, 36, 56)
+        val accent = Color.rgb(52, 183, 139)
+        val muted = Color.rgb(174, 190, 209)
+        fun rounded(color: Int, radius: Float = 18f): GradientDrawable =
+            GradientDrawable().apply { setColor(color); cornerRadius = radius * resources.displayMetrics.density }
+        fun caption(value: String, size: Float = 13f): TextView = TextView(this).apply {
+            text = value; textSize = size; setTextColor(muted)
+        }
+        fun action(value: String, background: Int): Button = Button(this).apply {
+            text = value; isAllCaps = false; textSize = 15f
+            setTextColor(Color.WHITE); this.background = rounded(background, 14f)
+            setPadding(14, 4, 14, 4)
+        }
+        val root = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setBackgroundColor(navy)
+            setPadding(12, 10, 12, 12)
+        }
+        val header = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(8, 2, 8, 10) }
+        header.addView(TextView(this).apply {
+            text = "MATCHCLIP"; textSize = 22f; setTextColor(Color.WHITE)
+            setTypeface(null, android.graphics.Typeface.BOLD); letterSpacing = 0.09f
+        })
+        header.addView(caption("FOOTBALL HIGHLIGHT CAMERA  •  15s BEFORE / 5s AFTER", 11f))
+        root.addView(header)
+        val previewFrame = android.widget.FrameLayout(this).apply { background = rounded(Color.BLACK, 18f) }
         preview = TextureView(this)
+        previewFrame.addView(preview, android.widget.FrameLayout.LayoutParams(-1, -1))
+        val liveTag = TextView(this).apply {
+            text = "●  PREVIEW"; textSize = 12f; setTextColor(Color.WHITE)
+            setPadding(16, 10, 16, 10); background = rounded(Color.rgb(37, 48, 66), 10f)
+        }
+        previewFrame.addView(liveTag, android.widget.FrameLayout.LayoutParams(-2, -2, android.view.Gravity.TOP or android.view.Gravity.LEFT).apply {
+            setMargins(12, 12, 0, 0)
+        })
+        root.addView(previewFrame, LinearLayout.LayoutParams(-1, 0, 1f))
+        val bottom = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL; setPadding(14, 10, 14, 12)
+            background = rounded(panel)
+        }
+        val cameraRow = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = android.view.Gravity.CENTER_VERTICAL }
+        cameraRow.addView(caption("CAMERA", 12f), LinearLayout.LayoutParams(76, -2))
         lenses = Spinner(this)
-        startButton = Button(this).apply { text = "START" }
-        markButton = Button(this).apply { text = "SAVE HIGHLIGHT"; isEnabled = false }
-        zoom = SeekBar(this).apply { max = 100; progress = 0 }
-        torch = Button(this).apply { text = "TORCH" }
-        status = TextView(this).apply { text = "15s before + 5s after · MP4"; textSize = 17f }
-        controls.addView(lenses, LinearLayout.LayoutParams(0, 65, 1f))
-        controls.addView(startButton)
-        controls.addView(markButton)
-        layout.addView(controls)
-        val cameraControls = LinearLayout(this)
-        cameraControls.addView(TextView(this).apply { text = "ZOOM" })
-        cameraControls.addView(zoom, LinearLayout.LayoutParams(0, 55, 1f))
-        cameraControls.addView(torch)
-        layout.addView(cameraControls)
-        layout.addView(preview, LinearLayout.LayoutParams(-1, 0, 1f))
-        layout.addView(status)
-        setContentView(layout)
+        cameraRow.addView(lenses, LinearLayout.LayoutParams(0, 48, 1f))
+        torch = action("Torch off", Color.rgb(55, 72, 96))
+        cameraRow.addView(torch, LinearLayout.LayoutParams(112, 46))
+        bottom.addView(cameraRow)
+        val zoomRow = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = android.view.Gravity.CENTER_VERTICAL }
+        zoomRow.addView(caption("ZOOM", 12f), LinearLayout.LayoutParams(76, -2))
+        zoom = SeekBar(this).apply { max = 100; progress = 0; progressTintList = android.content.res.ColorStateList.valueOf(accent) }
+        zoomRow.addView(zoom, LinearLayout.LayoutParams(0, 48, 1f))
+        zoomLabel = TextView(this).apply { text = "1.0×"; setTextColor(Color.WHITE); textSize = 15f; gravity = android.view.Gravity.CENTER }
+        zoomRow.addView(zoomLabel, LinearLayout.LayoutParams(68, -2))
+        bottom.addView(zoomRow)
+        val exposureRow = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = android.view.Gravity.CENTER_VERTICAL }
+        exposureRow.addView(caption("LIGHT", 12f), LinearLayout.LayoutParams(76, -2))
+        exposure = SeekBar(this).apply { max = 24; progress = 12; progressTintList = android.content.res.ColorStateList.valueOf(accent) }
+        exposureRow.addView(exposure, LinearLayout.LayoutParams(0, 48, 1f))
+        exposureLabel = TextView(this).apply { text = "0"; setTextColor(Color.WHITE); textSize = 15f; gravity = android.view.Gravity.CENTER }
+        exposureRow.addView(exposureLabel, LinearLayout.LayoutParams(68, -2))
+        bottom.addView(exposureRow)
+        val actions = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; setPadding(0, 8, 0, 8) }
+        startButton = action("●  Start", Color.rgb(51, 111, 157))
+        markButton = action("★  SAVE HIGHLIGHT", accent).apply { isEnabled = false }
+        actions.addView(startButton, LinearLayout.LayoutParams(0, 58, 1f).apply { rightMargin = 10 })
+        actions.addView(markButton, LinearLayout.LayoutParams(0, 58, 2f))
+        bottom.addView(actions)
+        status = TextView(this).apply {
+            text = "Ready · Choose a camera, then press Start"
+            textSize = 12f; setTextColor(muted); gravity = android.view.Gravity.CENTER
+            setPadding(4, 4, 4, 0)
+        }
+        bottom.addView(status)
+        root.addView(bottom)
+        setContentView(root)
         startButton.setOnClickListener { if (running.get()) stopRecording() else startRecording() }
         markButton.setOnClickListener { markHighlight() }
-        torch.setOnClickListener { torchOn = !torchOn; torch.text = if (torchOn) "TORCH ON" else "TORCH OFF"; applyControls() }
+        torch.setOnClickListener { torchOn = !torchOn; torch.text = if (torchOn) "Torch on" else "Torch off"; applyControls() }
         zoom.setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
             override fun onProgressChanged(view: SeekBar?, value: Int, fromUser: Boolean) {
                 if (!fromUser) return
@@ -89,6 +152,17 @@ class MainActivity : Activity() {
                 val low = range?.lower ?: 1f
                 val high = (range?.upper ?: 8f).coerceAtMost(8f)
                 zoomValue = low + (high - low) * value / 100f
+                zoomLabel.text = String.format(java.util.Locale.US, "%.1f×", zoomValue)
+                applyControls()
+            }
+            override fun onStartTrackingTouch(view: SeekBar?) {}
+            override fun onStopTrackingTouch(view: SeekBar?) {}
+        })
+        exposure.setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
+            override fun onProgressChanged(view: SeekBar?, value: Int, fromUser: Boolean) {
+                if (!fromUser) return
+                exposureValue = value - 12
+                exposureLabel.text = if (exposureValue > 0) "+$exposureValue" else "$exposureValue"
                 applyControls()
             }
             override fun onStartTrackingTouch(view: SeekBar?) {}
@@ -120,7 +194,8 @@ class MainActivity : Activity() {
         }
         val names = cameraIds.mapIndexed { index, id ->
             val focal = manager.getCameraCharacteristics(id).get(CameraCharacteristics.LENS_INFO_AVAILABLE_FOCAL_LENGTHS)?.minOrNull()
-            "${if (index == 0) "Widest rear" else "Rear ${index + 1}"} · ${focal ?: "?"}mm · $id"
+            val name = if (index == 0) "Wide / ultra-wide" else "Rear camera ${index + 1}"
+            "$name  ·  ${focal ?: "?"} mm  (ID $id)"
         }
         runOnUiThread { lenses.adapter = ArrayAdapter(this, android.R.layout.simple_spinner_dropdown_item, names) }
     }
@@ -172,7 +247,7 @@ class MainActivity : Activity() {
                 override fun onDisconnected(device: CameraDevice) { device.close(); stopRecording() }
                 override fun onError(device: CameraDevice, error: Int) { device.close(); message("Camera error $error"); stopRecording() }
             }, handler)
-            startButton.text = "STOP"
+            startButton.text = "■  Stop"
             markButton.isEnabled = true
             lenses.isEnabled = false
         } catch (e: Exception) { message("Start failed: ${e.message}"); stopRecording() }
@@ -265,7 +340,7 @@ class MainActivity : Activity() {
 
     private fun stopRecording() {
         if (!running.getAndSet(false)) return
-        runOnUiThread { markButton.isEnabled = false; startButton.text = "START"; lenses.isEnabled = true }
+        runOnUiThread { markButton.isEnabled = false; startButton.text = "●  Start"; lenses.isEnabled = true }
         try { session?.close(); camera?.close() } catch (_: Exception) {}
         session = null; camera = null; activeBuilder = null
         try { drainThread?.join(1500) } catch (_: Exception) {}
@@ -297,7 +372,9 @@ class MainActivity : Activity() {
         val dst = RectF(0f, 0f, bufferW * scale, bufferH * scale)
         dst.offset((w - dst.width()) / 2, (h - dst.height()) / 2)
         matrix.setRectToRect(RectF(0f, 0f, w, h), dst, Matrix.ScaleToFit.FILL)
-        if (rotated) matrix.postRotate(if (rotation == 90) -90f else 90f, w / 2, h / 2)
+        // TextureView's transform must rotate the buffer into display coordinates.
+        // The previous sign was reversed, giving an upside-down/sideways preview.
+        if (rotated) matrix.postRotate(if (rotation == 90) 90f else -90f, w / 2, h / 2)
         preview.setTransform(matrix)
     }
 
@@ -316,6 +393,13 @@ class MainActivity : Activity() {
                 val range = characteristics.get(CameraCharacteristics.CONTROL_ZOOM_RATIO_RANGE)
                 if (range != null) {
                     builder.set(CaptureRequest.CONTROL_ZOOM_RATIO, zoomValue.coerceIn(range.lower, range.upper))
+                }
+                val compensation = characteristics.get(CameraCharacteristics.CONTROL_AE_COMPENSATION_RANGE)
+                if (compensation != null) {
+                    val steps = if (exposureValue >= 0) exposureValue * compensation.upper / 12f
+                        else exposureValue * -compensation.lower / 12f
+                    builder.set(CaptureRequest.CONTROL_AE_EXPOSURE_COMPENSATION,
+                        steps.toInt().coerceIn(compensation.lower, compensation.upper))
                 }
                 if (characteristics.get(CameraCharacteristics.FLASH_INFO_AVAILABLE) == true) {
                     builder.set(CaptureRequest.FLASH_MODE, if (torchOn) CaptureRequest.FLASH_MODE_TORCH else CaptureRequest.FLASH_MODE_OFF)
