@@ -37,6 +37,7 @@ class MainActivity : Activity() {
     private var frontFacing = false
     private var clipOrientation = 90
     private var rotationAdjustment = 270
+    private var lastPreviewRotation = -1
     private lateinit var rotateButton: Button
     private lateinit var startButton: Button
     private lateinit var markButton: Button
@@ -127,7 +128,7 @@ class MainActivity : Activity() {
         })
         previewContainer.addView(previewFrame, FrameLayout.LayoutParams(-1, -1, Gravity.CENTER))
         root.addView(previewContainer, LinearLayout.LayoutParams(-1, 0, 1f))
-        previewContainer.addOnLayoutChangeListener { _, _, _, _, _, _, _, _, _ -> updatePreview() }
+        previewContainer.addOnLayoutChangeListener { _, _, _, _, _, _, _, _, _ -> preview.post { updatePreview() } }
         val bottom = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL; setPadding(14, 10, 14, 12)
             background = rounded(panel)
@@ -508,6 +509,7 @@ class MainActivity : Activity() {
         val base = if (frontFacing) (sensorDegrees + displayDegrees()) % 360
                    else (sensorDegrees - displayDegrees() + 360) % 360
         val degrees = (base + rotationAdjustment) % 360
+        lastPreviewRotation = degrees
         val rotated = degrees == 90 || degrees == 270
         val holderW = previewContainer.width
         val holderH = previewContainer.height
@@ -550,7 +552,14 @@ class MainActivity : Activity() {
 
     override fun onConfigurationChanged(newConfig: Configuration) {
         super.onConfigurationChanged(newConfig)
-        preview.post { updatePreview() }
+        // Configuration callbacks can run before the new portrait dimensions
+        // have been measured. Reset the old landscape transform and wait for
+        // the view hierarchy to finish its new layout before fitting again.
+        preview.setTransform(Matrix())
+        previewContainer.requestLayout()
+        previewContainer.post {
+            preview.post { updatePreview() }
+        }
     }
 
     private fun applyControls() {
