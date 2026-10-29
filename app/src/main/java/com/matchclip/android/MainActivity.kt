@@ -5,6 +5,9 @@ import android.app.Activity
 import android.content.ContentValues
 import android.content.pm.PackageManager
 import android.graphics.SurfaceTexture
+import android.graphics.Matrix
+import android.graphics.RectF
+import android.content.res.Configuration
 import android.hardware.camera2.*
 import android.media.*
 import android.os.*
@@ -19,6 +22,14 @@ class MainActivity : Activity() {
     private lateinit var preview: TextureView
     private lateinit var status: TextView
     private lateinit var lenses: Spinner
+    private lateinit var zoom: SeekBar
+    private lateinit var torch: Button
+    private var torchOn = false
+    private var zoomValue = 1f
+    private var activeBuilder: CaptureRequest.Builder? = null
+    private var cameraId: String? = null
+    private var sensorDegrees = 90
+    private var clipOrientation = 90
     private lateinit var startButton: Button
     private lateinit var markButton: Button
     private val cameraThread = HandlerThread("CameraThread")
@@ -53,19 +64,39 @@ class MainActivity : Activity() {
         lenses = Spinner(this)
         startButton = Button(this).apply { text = "START" }
         markButton = Button(this).apply { text = "SAVE HIGHLIGHT"; isEnabled = false }
+        zoom = SeekBar(this).apply { max = 100; progress = 0 }
+        torch = Button(this).apply { text = "TORCH" }
         status = TextView(this).apply { text = "15s before + 5s after · MP4"; textSize = 17f }
         controls.addView(lenses, LinearLayout.LayoutParams(0, 65, 1f))
         controls.addView(startButton)
         controls.addView(markButton)
         layout.addView(controls)
+        val cameraControls = LinearLayout(this)
+        cameraControls.addView(TextView(this).apply { text = "ZOOM" })
+        cameraControls.addView(zoom, LinearLayout.LayoutParams(0, 55, 1f))
+        cameraControls.addView(torch)
+        layout.addView(cameraControls)
         layout.addView(preview, LinearLayout.LayoutParams(-1, 0, 1f))
         layout.addView(status)
         setContentView(layout)
         startButton.setOnClickListener { if (running.get()) stopRecording() else startRecording() }
         markButton.setOnClickListener { markHighlight() }
+        torch.setOnClickListener { torchOn = !torchOn; torch.text = if (torchOn) "TORCH ON" else "TORCH OFF"; applyControls() }
+        zoom.setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
+            override fun onProgressChanged(view: SeekBar?, value: Int, fromUser: Boolean) {
+                if (!fromUser) return
+                val range = cameraId?.let { manager.getCameraCharacteristics(it).get(CameraCharacteristics.CONTROL_ZOOM_RATIO_RANGE) }
+                val low = range?.lower ?: 1f
+                val high = (range?.upper ?: 8f).coerceAtMost(8f)
+                zoomValue = low + (high - low) * value / 100f
+                applyControls()
+            }
+            override fun onStartTrackingTouch(view: SeekBar?) {}
+            override fun onStopTrackingTouch(view: SeekBar?) {}
+        })
         preview.surfaceTextureListener = object : TextureView.SurfaceTextureListener {
-            override fun onSurfaceTextureAvailable(s: SurfaceTexture, w: Int, h: Int) { listCameras() }
-            override fun onSurfaceTextureSizeChanged(s: SurfaceTexture, w: Int, h: Int) {}
+            override fun onSurfaceTextureAvailable(s: SurfaceTexture, w: Int, h: Int) { listCameras(); updatePreview() }
+            override fun onSurfaceTextureSizeChanged(s: SurfaceTexture, w: Int, h: Int) { updatePreview() }
             override fun onSurfaceTextureDestroyed(s: SurfaceTexture): Boolean { stopRecording(); return true }
             override fun onSurfaceTextureUpdated(s: SurfaceTexture) {}
         }
@@ -113,6 +144,10 @@ class MainActivity : Activity() {
             running.set(true)
             drainThread = Thread({ drainEncoder() }, "EncoderDrain").also { it.start() }
             val id = cameraIds[lenses.selectedItemPosition.coerceIn(cameraIds.indices)]
+            cameraId = id
+            sensorDegrees = manager.getCameraCharacteristics(id).get(CameraCharacteristics.SENSOR_ORIENTATION) ?: 90
+            clipOrientation = (sensorDegrees - displayDegrees() + 360) % 360
+            updatePreview()
             manager.openCamera(id, object : CameraDevice.StateCallback() {
                 override fun onOpened(device: CameraDevice) {
                     camera = device
@@ -126,8 +161,9 @@ class MainActivity : Activity() {
                             val request = device.createCaptureRequest(CameraDevice.TEMPLATE_RECORD).apply {
                                 surfaces.forEach { addTarget(it) }
                                 set(CaptureRequest.CONTROL_AF_MODE, CaptureRequest.CONTROL_AF_MODE_CONTINUOUS_VIDEO)
-                            }.build()
-                            configured.setRepeatingRequest(request, null, handler)
+                            }
+                            activeBuilder = request
+                            applyControls()
                             message("Recording · press volume up to tag")
                         }
                         override fun onConfigureFailed(configured: CameraCaptureSession) { message("Camera configuration failed"); stopRecording() }
@@ -208,6 +244,7 @@ class MainActivity : Activity() {
                     descriptor.use {
                         val muxer = MediaMuxer(it.fileDescriptor, MediaMuxer.OutputFormat.MUXER_OUTPUT_MPEG_4)
                         try {
+                            muxer.setOrientationHint(clipOrientation)
                             val track = muxer.addTrack(fmt)
                             muxer.start()
                             val origin = segment.first().pts
@@ -230,12 +267,62 @@ class MainActivity : Activity() {
         if (!running.getAndSet(false)) return
         runOnUiThread { markButton.isEnabled = false; startButton.text = "START"; lenses.isEnabled = true }
         try { session?.close(); camera?.close() } catch (_: Exception) {}
-        session = null; camera = null
+        session = null; camera = null; activeBuilder = null
         try { drainThread?.join(1500) } catch (_: Exception) {}
         try { encoder?.stop(); encoder?.release(); encoderSurface?.release() } catch (_: Exception) {}
         encoder = null; encoderSurface = null
         val lost = synchronized(guard) { val n = pending.size; pending.clear(); n }
         message(if (lost > 0) "Stopped; $lost pending clips lost. Wait 5 seconds after tagging." else "Stopped · clips in Movies/MatchClip")
+    }
+
+
+    private fun displayDegrees(): Int = when (windowManager.defaultDisplay.rotation) {
+        Surface.ROTATION_90 -> 90
+        Surface.ROTATION_180 -> 180
+        Surface.ROTATION_270 -> 270
+        else -> 0
+    }
+
+    private fun updatePreview() {
+        if (!::preview.isInitialized || !preview.isAvailable) return
+        val w = preview.width.toFloat()
+        val h = preview.height.toFloat()
+        if (w <= 0 || h <= 0) return
+        val rotation = (sensorDegrees - displayDegrees() + 360) % 360
+        val rotated = rotation == 90 || rotation == 270
+        val bufferW = if (rotated) 720f else 1280f
+        val bufferH = if (rotated) 1280f else 720f
+        val scale = maxOf(w / bufferW, h / bufferH)
+        val matrix = Matrix()
+        val dst = RectF(0f, 0f, bufferW * scale, bufferH * scale)
+        dst.offset((w - dst.width()) / 2, (h - dst.height()) / 2)
+        matrix.setRectToRect(RectF(0f, 0f, w, h), dst, Matrix.ScaleToFit.FILL)
+        if (rotated) matrix.postRotate(if (rotation == 90) -90f else 90f, w / 2, h / 2)
+        preview.setTransform(matrix)
+    }
+
+    override fun onConfigurationChanged(newConfig: Configuration) {
+        super.onConfigurationChanged(newConfig)
+        preview.post { updatePreview() }
+    }
+
+    private fun applyControls() {
+        val builder = activeBuilder ?: return
+        val active = session ?: return
+        val id = cameraId ?: return
+        handler.post {
+            try {
+                val characteristics = manager.getCameraCharacteristics(id)
+                val range = characteristics.get(CameraCharacteristics.CONTROL_ZOOM_RATIO_RANGE)
+                if (range != null) {
+                    builder.set(CaptureRequest.CONTROL_ZOOM_RATIO, zoomValue.coerceIn(range.lower, range.upper))
+                }
+                if (characteristics.get(CameraCharacteristics.FLASH_INFO_AVAILABLE) == true) {
+                    builder.set(CaptureRequest.FLASH_MODE, if (torchOn) CaptureRequest.FLASH_MODE_TORCH else CaptureRequest.FLASH_MODE_OFF)
+                }
+                active.setRepeatingRequest(builder.build(), null, handler)
+            } catch (e: Exception) { message("Control error: " + e.message) }
+        }
     }
 
     private fun message(text: String) { runOnUiThread { status.text = text } }
