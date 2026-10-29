@@ -184,6 +184,7 @@ class MainActivity : Activity() {
         }
         markButton.setOnClickListener { markHighlight() }
         rotateButton.setOnClickListener {
+            if (running.get()) return@setOnClickListener
             rotationAdjustment = (rotationAdjustment + 90) % 360
             rotateButton.text = "↻ Rotate preview · $rotationAdjustment°"
             updatePreview()
@@ -367,8 +368,8 @@ class MainActivity : Activity() {
             val characteristics = manager.getCameraCharacteristics(id)
             sensorDegrees = characteristics.get(CameraCharacteristics.SENSOR_ORIENTATION) ?: 90
             frontFacing = characteristics.get(CameraCharacteristics.LENS_FACING) == CameraCharacteristics.LENS_FACING_FRONT
-            clipOrientation = if (frontFacing) (sensorDegrees + displayDegrees()) % 360
-                else (sensorDegrees - displayDegrees() + 360) % 360
+            // The MP4 orientation and preview must agree at recording start.
+            clipOrientation = calculatedPreviewDegrees()
             updatePreview()
             if (camera != null && cameraId == id) {
                 createCameraSession(record = true)
@@ -393,6 +394,7 @@ class MainActivity : Activity() {
             startButton.text = "■  Stop"
             markButton.isEnabled = true
             lenses.isEnabled = false
+            rotateButton.isEnabled = false
         } catch (e: Exception) { message("Start failed: ${e.message}"); stopRecording() }
     }
 
@@ -483,7 +485,7 @@ class MainActivity : Activity() {
 
     private fun stopRecording() {
         if (!running.getAndSet(false)) return
-        runOnUiThread { markButton.isEnabled = false; startButton.text = "●  Start"; lenses.isEnabled = true }
+        runOnUiThread { markButton.isEnabled = false; startButton.text = "●  Start"; lenses.isEnabled = true; rotateButton.isEnabled = true }
         try { session?.close() } catch (_: Exception) {}
         session = null; activeBuilder = null
         try { drainThread?.join(1500) } catch (_: Exception) {}
@@ -525,58 +527,48 @@ class MainActivity : Activity() {
         previewContainer.post { updatePreview() }
     }
 
-    private fun updatePreview() {
-        if (!::preview.isInitialized || !preview.isAvailable) return
-        val w = preview.width.toFloat()
-        val h = preview.height.toFloat()
-        if (w <= 0f || h <= 0f) return
-
-        // The encoder receives the full 1280x720 camera frame. Show the same
-        // complete 16:9 image in the TextureView, with letterboxing/pillarboxing
-        // instead of centre-cropping to fill the available screen area.
+    private fun calculatedPreviewDegrees(): Int {
         val base = if (frontFacing) (sensorDegrees + displayDegrees()) % 360
                    else (sensorDegrees - displayDegrees() + 360) % 360
-        // Respect the user's manual 90-degree rotation in every orientation.
-        // The previous landscape/portrait coercion cancelled button presses.
-        // In landscape the sensor already tracks the rotated display. Apply
-        // an extra quarter turn so the default 270-degree correction does not
-        // force a narrow portrait-shaped viewport in a wide screen.
-        // The manual rotation button remains additive and fully functional.
-        val landscape = resources.configuration.orientation == Configuration.ORIENTATION_LANDSCAPE
-        val degrees = (base + rotationAdjustment + if (landscape) 90 else 0) % 360
-        lastPreviewRotation = degrees
+        return (base + rotationAdjustment) % 360
+    }
+
+    private fun updatePreview() {
+        if (!::preview.isInitialized || !preview.isAvailable) return
+        // During recording, the MP4 orientation is fixed. Keep the live
+        // preview aligned with that saved orientation even if the UI rotates.
+        val degrees = if (running.get()) clipOrientation else calculatedPreviewDegrees()
         val rotated = degrees == 90 || degrees == 270
         val holderW = previewContainer.width
         val holderH = previewContainer.height
-        if (holderW > 0 && holderH > 0) {
-            val ratio = if (rotated) 9f / 16f else 16f / 9f
-            val fittedW = minOf(holderW.toFloat(), holderH * ratio).toInt().coerceAtLeast(1)
-            val fittedH = minOf(holderH.toFloat(), holderW / ratio).toInt().coerceAtLeast(1)
-            val frame = preview.parent as FrameLayout
-            val params = frame.layoutParams as FrameLayout.LayoutParams
-            if (params.width != fittedW || params.height != fittedH) {
-                params.width = fittedW
-                params.height = fittedH
-                params.gravity = Gravity.CENTER
-                frame.layoutParams = params
-                preview.post { updatePreview() }
-                return
-            }
+        if (holderW <= 0 || holderH <= 0) return
+        val aspect = if (rotated) 9f / 16f else 16f / 9f
+        val fitW = minOf(holderW.toFloat(), holderH * aspect).toInt().coerceAtLeast(1)
+        val fitH = minOf(holderH.toFloat(), holderW / aspect).toInt().coerceAtLeast(1)
+        val frame = preview.parent as FrameLayout
+        val lp = frame.layoutParams as FrameLayout.LayoutParams
+        if (lp.width != fitW || lp.height != fitH) {
+            lp.width = fitW
+            lp.height = fitH
+            lp.gravity = Gravity.CENTER
+            frame.layoutParams = lp
+            preview.post { updatePreview() }
+            return
         }
-        // A centre-fitted, aspect-preserving transform. The preview is never
-        // stretched or centre-cropped: all four recorded frame edges remain
-        // visible even as the device or manual rotation changes.
+        val w = preview.width.toFloat()
+        val h = preview.height.toFloat()
+        if (w <= 0f || h <= 0f) return
         val sourceW = 1280f
         val sourceH = 720f
         val orientedW = if (rotated) sourceH else sourceW
         val orientedH = if (rotated) sourceW else sourceH
-        val fit = minOf(w / orientedW, h / orientedH)
+        val scale = minOf(w / orientedW, h / orientedH)
         val cx = w / 2f
         val cy = h / 2f
         val transform = Matrix()
         transform.setScale(sourceW / w, sourceH / h, cx, cy)
         transform.postRotate(degrees.toFloat(), cx, cy)
-        transform.postScale(fit, fit, cx, cy)
+        transform.postScale(scale, scale, cx, cy)
         if (frontFacing) transform.postScale(-1f, 1f, cx, cy)
         preview.setTransform(transform)
     }
