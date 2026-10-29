@@ -507,20 +507,32 @@ class MainActivity : Activity() {
         val w = preview.width.toFloat()
         val h = preview.height.toFloat()
         if (w <= 0f || h <= 0f) return
+
+        // The encoder receives the full 1280x720 camera frame. Show the same
+        // complete 16:9 image in the TextureView, with letterboxing/pillarboxing
+        // instead of centre-cropping to fill the available screen area.
         val base = if (frontFacing) (sensorDegrees + displayDegrees()) % 360
                    else (sensorDegrees - displayDegrees() + 360) % 360
         val degrees = (base + rotationAdjustment) % 360
         val rotated = degrees == 90 || degrees == 270
-        val bw = 1280f
-        val bh = 720f
-        val orientedW = if (rotated) bh else bw
-        val orientedH = if (rotated) bw else bh
-        val scale = maxOf(w / orientedW, h / orientedH)
+        val frameW = if (rotated) 720f else 1280f
+        val frameH = if (rotated) 1280f else 720f
+        val fitScale = minOf(w / frameW, h / frameH)
+        val targetW = frameW * fitScale
+        val targetH = frameH * fitScale
+
+        // TextureView transforms operate in view coordinates. The view starts
+        // with its source stretched to its own bounds, so undo that stretch,
+        // rotate, then fit the entire frame within the available rectangle.
         val cx = w / 2f
         val cy = h / 2f
         val transform = Matrix()
-        transform.setScale(bw * scale / w, bh * scale / h, cx, cy)
+        val sourceW = 1280f
+        val sourceH = 720f
+        transform.setScale(sourceW / w, sourceH / h, cx, cy)
         transform.postRotate(degrees.toFloat(), cx, cy)
+        val outputScale = if (rotated) targetW / sourceH else targetW / sourceW
+        transform.postScale(outputScale, outputScale, cx, cy)
         if (frontFacing) transform.postScale(-1f, 1f, cx, cy)
         preview.setTransform(transform)
     }
