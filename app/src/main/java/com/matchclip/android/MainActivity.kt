@@ -42,6 +42,10 @@ class MainActivity : Activity() {
     private lateinit var handler: Handler
     private lateinit var manager: CameraManager
     private var camera: CameraDevice? = null
+    private var openingCamera = false
+    private var switchingSession = false
+    private var previewSurface: Surface? = null
+    private var cameraGeneration = 0
     private var session: CameraCaptureSession? = null
     private var encoder: MediaCodec? = null
     private var encoderSurface: Surface? = null
@@ -143,6 +147,12 @@ class MainActivity : Activity() {
         root.addView(bottom)
         setContentView(root)
         startButton.setOnClickListener { if (running.get()) stopRecording() else startRecording() }
+        lenses.onItemSelectedListener = object : android.widget.AdapterView.OnItemSelectedListener {
+            override fun onItemSelected(parent: android.widget.AdapterView<*>?, view: View?, position: Int, id: Long) {
+                if (!running.get() && preview.isAvailable) openPreviewCamera()
+            }
+            override fun onNothingSelected(parent: android.widget.AdapterView<*>?) {}
+        }
         markButton.setOnClickListener { markHighlight() }
         torch.setOnClickListener { torchOn = !torchOn; torch.text = if (torchOn) "Torch on" else "Torch off"; applyControls() }
         zoom.setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
@@ -169,19 +179,19 @@ class MainActivity : Activity() {
             override fun onStopTrackingTouch(view: SeekBar?) {}
         })
         preview.surfaceTextureListener = object : TextureView.SurfaceTextureListener {
-            override fun onSurfaceTextureAvailable(s: SurfaceTexture, w: Int, h: Int) { listCameras(); updatePreview() }
+            override fun onSurfaceTextureAvailable(s: SurfaceTexture, w: Int, h: Int) { listCameras(); updatePreview(); preview.post { openPreviewCamera() } }
             override fun onSurfaceTextureSizeChanged(s: SurfaceTexture, w: Int, h: Int) { updatePreview() }
-            override fun onSurfaceTextureDestroyed(s: SurfaceTexture): Boolean { stopRecording(); return true }
+            override fun onSurfaceTextureDestroyed(s: SurfaceTexture): Boolean { stopRecording(); closeCameraPreview(); return true }
             override fun onSurfaceTextureUpdated(s: SurfaceTexture) {}
         }
         if (checkSelfPermission(Manifest.permission.CAMERA) != PackageManager.PERMISSION_GRANTED)
             requestPermissions(arrayOf(Manifest.permission.CAMERA), 10)
-        else listCameras()
+        else { listCameras(); preview.post { openPreviewCamera() } }
     }
 
     override fun onRequestPermissionsResult(requestCode: Int, permissions: Array<out String>, grantResults: IntArray) {
         super.onRequestPermissionsResult(requestCode, permissions, grantResults)
-        if (requestCode == 10 && grantResults.firstOrNull() == PackageManager.PERMISSION_GRANTED) listCameras()
+        if (requestCode == 10 && grantResults.firstOrNull() == PackageManager.PERMISSION_GRANTED) { listCameras(); preview.post { openPreviewCamera() } }
         else message("Camera permission required")
     }
 
@@ -198,6 +208,95 @@ class MainActivity : Activity() {
             "$name  ·  ${focal ?: "?"} mm  (ID $id)"
         }
         runOnUiThread { lenses.adapter = ArrayAdapter(this, android.R.layout.simple_spinner_dropdown_item, names) }
+    }
+
+    private fun closeCameraPreview() {
+        cameraGeneration++
+        try { session?.close() } catch (_: Exception) {}
+        try { camera?.close() } catch (_: Exception) {}
+        try { previewSurface?.release() } catch (_: Exception) {}
+        session = null
+        camera = null
+        previewSurface = null
+        activeBuilder = null
+        openingCamera = false
+        switchingSession = false
+    }
+
+    private fun openPreviewCamera() {
+        if (running.get() || openingCamera || switchingSession || !preview.isAvailable || cameraIds.isEmpty()) return
+        if (checkSelfPermission(Manifest.permission.CAMERA) != PackageManager.PERMISSION_GRANTED) return
+        val id = cameraIds[lenses.selectedItemPosition.coerceIn(cameraIds.indices)]
+        if (cameraId == id && camera != null && session != null) return
+        closeCameraPreview()
+        cameraId = id
+        sensorDegrees = manager.getCameraCharacteristics(id).get(CameraCharacteristics.SENSOR_ORIENTATION) ?: 90
+        updatePreview()
+        val generation = cameraGeneration
+        openingCamera = true
+        message("Opening camera preview…")
+        try {
+            manager.openCamera(id, object : CameraDevice.StateCallback() {
+                override fun onOpened(device: CameraDevice) {
+                    if (generation != cameraGeneration || running.get()) { device.close(); return }
+                    camera = device
+                    openingCamera = false
+                    createCameraSession(record = false)
+                }
+                override fun onDisconnected(device: CameraDevice) {
+                    device.close()
+                    if (generation == cameraGeneration) { closeCameraPreview(); message("Camera disconnected") }
+                }
+                override fun onError(device: CameraDevice, error: Int) {
+                    device.close()
+                    if (generation == cameraGeneration) { closeCameraPreview(); message("Camera error $error") }
+                }
+            }, handler)
+        } catch (e: Exception) { openingCamera = false; message("Preview error: " + e.message) }
+    }
+
+    private fun createCameraSession(record: Boolean) {
+        val device = camera ?: return
+        val texture = preview.surfaceTexture ?: return
+        val generation = cameraGeneration
+        switchingSession = true
+        try { session?.close() } catch (_: Exception) {}
+        session = null
+        try { previewSurface?.release() } catch (_: Exception) {}
+        texture.setDefaultBufferSize(1280, 720)
+        val display = Surface(texture)
+        previewSurface = display
+        val surfaces = mutableListOf(display)
+        if (record) {
+            val videoSurface = encoderSurface ?: return
+            surfaces.add(videoSurface)
+        }
+        try {
+            device.createCaptureSession(surfaces, object : CameraCaptureSession.StateCallback() {
+                override fun onConfigured(configured: CameraCaptureSession) {
+                    if (generation != cameraGeneration || (record != running.get())) {
+                        configured.close(); return
+                    }
+                    session = configured
+                    switchingSession = false
+                    try {
+                        activeBuilder = device.createCaptureRequest(
+                            if (record) CameraDevice.TEMPLATE_RECORD else CameraDevice.TEMPLATE_PREVIEW
+                        ).apply {
+                            surfaces.forEach { addTarget(it) }
+                            set(CaptureRequest.CONTROL_AF_MODE, CaptureRequest.CONTROL_AF_MODE_CONTINUOUS_VIDEO)
+                        }
+                        applyControls()
+                        message(if (record) "Recording · volume up saves highlight" else "Live preview · frame the pitch, then Start")
+                    } catch (e: Exception) { message("Camera request error: " + e.message) }
+                }
+                override fun onConfigureFailed(configured: CameraCaptureSession) {
+                    switchingSession = false
+                    configured.close()
+                    message("Camera preview configuration failed")
+                }
+            }, handler)
+        } catch (e: Exception) { switchingSession = false; message("Session error: " + e.message) }
     }
 
     private fun startRecording() {
@@ -223,30 +322,26 @@ class MainActivity : Activity() {
             sensorDegrees = manager.getCameraCharacteristics(id).get(CameraCharacteristics.SENSOR_ORIENTATION) ?: 90
             clipOrientation = (sensorDegrees - displayDegrees() + 360) % 360
             updatePreview()
-            manager.openCamera(id, object : CameraDevice.StateCallback() {
-                override fun onOpened(device: CameraDevice) {
-                    camera = device
-                    val texture = preview.surfaceTexture ?: return
-                    texture.setDefaultBufferSize(1280, 720)
-                    val display = Surface(texture)
-                    val surfaces = listOf(display, encoderSurface!!)
-                    device.createCaptureSession(surfaces, object : CameraCaptureSession.StateCallback() {
-                        override fun onConfigured(configured: CameraCaptureSession) {
-                            session = configured
-                            val request = device.createCaptureRequest(CameraDevice.TEMPLATE_RECORD).apply {
-                                surfaces.forEach { addTarget(it) }
-                                set(CaptureRequest.CONTROL_AF_MODE, CaptureRequest.CONTROL_AF_MODE_CONTINUOUS_VIDEO)
-                            }
-                            activeBuilder = request
-                            applyControls()
-                            message("Recording · press volume up to tag")
-                        }
-                        override fun onConfigureFailed(configured: CameraCaptureSession) { message("Camera configuration failed"); stopRecording() }
-                    }, handler)
-                }
-                override fun onDisconnected(device: CameraDevice) { device.close(); stopRecording() }
-                override fun onError(device: CameraDevice, error: Int) { device.close(); message("Camera error $error"); stopRecording() }
-            }, handler)
+            if (camera != null && cameraId == id) {
+                createCameraSession(record = true)
+            } else {
+                closeCameraPreview()
+                cameraId = id
+                val generation = cameraGeneration
+                openingCamera = true
+                manager.openCamera(id, object : CameraDevice.StateCallback() {
+                    override fun onOpened(device: CameraDevice) {
+                        if (generation != cameraGeneration) { device.close(); return }
+                        openingCamera = false
+                        camera = device
+                        createCameraSession(record = true)
+                    }
+                    override fun onDisconnected(device: CameraDevice) { device.close(); stopRecording() }
+                    override fun onError(device: CameraDevice, error: Int) {
+                        device.close(); message("Camera error $error"); stopRecording()
+                    }
+                }, handler)
+            }
             startButton.text = "■  Stop"
             markButton.isEnabled = true
             lenses.isEnabled = false
@@ -341,13 +436,16 @@ class MainActivity : Activity() {
     private fun stopRecording() {
         if (!running.getAndSet(false)) return
         runOnUiThread { markButton.isEnabled = false; startButton.text = "●  Start"; lenses.isEnabled = true }
-        try { session?.close(); camera?.close() } catch (_: Exception) {}
-        session = null; camera = null; activeBuilder = null
+        try { session?.close() } catch (_: Exception) {}
+        session = null; activeBuilder = null
         try { drainThread?.join(1500) } catch (_: Exception) {}
         try { encoder?.stop(); encoder?.release(); encoderSurface?.release() } catch (_: Exception) {}
         encoder = null; encoderSurface = null
         val lost = synchronized(guard) { val n = pending.size; pending.clear(); n }
         message(if (lost > 0) "Stopped; $lost pending clips lost. Wait 5 seconds after tagging." else "Stopped · clips in Movies/MatchClip")
+        preview.post { if (preview.isAvailable) {
+            if (camera != null) createCameraSession(record = false) else openPreviewCamera()
+        } }
     }
 
 
@@ -417,5 +515,5 @@ class MainActivity : Activity() {
         }
         return super.onKeyDown(keyCode, event)
     }
-    override fun onDestroy() { stopRecording(); cameraThread.quitSafely(); super.onDestroy() }
+    override fun onDestroy() { stopRecording(); closeCameraPreview(); cameraThread.quitSafely(); super.onDestroy() }
 }
