@@ -22,6 +22,7 @@ import java.util.concurrent.atomic.AtomicBoolean
 
 class MainActivity : Activity() {
     private lateinit var preview: TextureView
+    private lateinit var previewContainer: FrameLayout
     private lateinit var status: TextView
     private lateinit var lenses: Spinner
     private lateinit var zoomLabel: TextView
@@ -115,6 +116,7 @@ class MainActivity : Activity() {
         })
         header.addView(caption("FOOTBALL HIGHLIGHT CAMERA  •  15s BEFORE / 5s AFTER", 11f))
         root.addView(header)
+        previewContainer = FrameLayout(this)
         val previewFrame = android.widget.FrameLayout(this).apply { background = rounded(Color.BLACK, 18f) }
         preview = TextureView(this)
         previewFrame.addView(preview, android.widget.FrameLayout.LayoutParams(-1, -1))
@@ -125,7 +127,8 @@ class MainActivity : Activity() {
         previewFrame.addView(liveTag, android.widget.FrameLayout.LayoutParams(-2, -2, android.view.Gravity.TOP or android.view.Gravity.LEFT).apply {
             setMargins(12, 12, 0, 0)
         })
-        root.addView(previewFrame, LinearLayout.LayoutParams(-1, 0, 1f))
+        previewContainer.addView(previewFrame, FrameLayout.LayoutParams(-1, -1, Gravity.CENTER))
+        root.addView(previewContainer, LinearLayout.LayoutParams(-1, 0, 1f))
         val bottom = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL; setPadding(14, 10, 14, 12)
             background = rounded(panel)
