@@ -521,11 +521,18 @@ class MainActivity : Activity() {
         val w = preview.width.toFloat()
         val h = preview.height.toFloat()
         if (w <= 0f || h <= 0f) return
-        // Both camera surfaces receive the same 1280x720 buffer. Keep the
-        // TextureView at 16:9 with no rotation or crop, so it matches the MP4.
-        val scale = minOf(w / 1280f, h / 720f)
+
+        // Rotate the rear-camera live view by 90 degrees, while fitting the
+        // entire image inside the available preview without cropping.
+        val sourceW = 1280f
+        val sourceH = 720f
+        val scale = minOf(w / sourceH, h / sourceW)
+        val cx = w / 2f
+        val cy = h / 2f
         val transform = Matrix()
-        transform.setScale(1280f * scale / w, 720f * scale / h, w / 2f, h / 2f)
+        transform.setScale(sourceW / w, sourceH / h, cx, cy)
+        transform.postRotate(90f, cx, cy)
+        transform.postScale(scale, scale, cx, cy)
         preview.setTransform(transform)
     }
 
