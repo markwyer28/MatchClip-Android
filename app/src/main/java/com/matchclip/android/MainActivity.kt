@@ -540,8 +540,8 @@ class MainActivity : Activity() {
             return
         }
 
-        // The Pixel 6 preview arrives 90 degrees anticlockwise in this
-        // landscape configuration. Correct the live TextureView clockwise,
+        // The Pixel 6 preview arrives 90 degrees clockwise in this
+        // landscape configuration. Correct the live TextureView anticlockwise,
         // without touching the encoder surface or MP4 orientation metadata.
         // Keep the 16:9 viewport: compensate for the swapped dimensions.
         val w = preview.width.toFloat()
@@ -550,7 +550,7 @@ class MainActivity : Activity() {
         val cx = w / 2f
         val cy = h / 2f
         val transform = Matrix()
-        transform.setRotate(90f, cx, cy)
+        transform.setRotate(270f, cx, cy)
         transform.postScale(w / h, h / w, cx, cy)
         preview.setTransform(transform)
     }
