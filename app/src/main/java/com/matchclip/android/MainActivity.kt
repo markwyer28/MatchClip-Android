@@ -23,6 +23,9 @@ import java.util.concurrent.atomic.AtomicBoolean
 class MainActivity : Activity() {
     private lateinit var preview: TextureView
     private lateinit var previewContainer: FrameLayout
+    private lateinit var mainRoot: LinearLayout
+    private lateinit var headerView: LinearLayout
+    private lateinit var controlsPanel: LinearLayout
     private lateinit var status: TextView
     private lateinit var lenses: Spinner
     private lateinit var zoomLabel: TextView
@@ -115,6 +118,7 @@ class MainActivity : Activity() {
         })
         header.addView(caption("FOOTBALL HIGHLIGHT CAMERA  •  15s BEFORE / 5s AFTER", 11f))
         root.addView(header)
+        headerView = header
         previewContainer = FrameLayout(this)
         val previewFrame = android.widget.FrameLayout(this).apply { background = rounded(Color.BLACK, 18f) }
         preview = TextureView(this)
@@ -167,7 +171,10 @@ class MainActivity : Activity() {
         }
         bottom.addView(status)
         root.addView(bottom)
+        mainRoot = root
+        controlsPanel = bottom
         setContentView(root)
+        applyOrientationLayout()
         startButton.setOnClickListener { if (running.get()) stopRecording() else startRecording() }
         lenses.onItemSelectedListener = object : android.widget.AdapterView.OnItemSelectedListener {
             override fun onItemSelected(parent: android.widget.AdapterView<*>?, view: View?, position: Int, id: Long) {
@@ -497,6 +504,27 @@ class MainActivity : Activity() {
         else -> 0
     }
 
+    private fun applyOrientationLayout() {
+        if (!::mainRoot.isInitialized) return
+        val landscape = resources.configuration.orientation == Configuration.ORIENTATION_LANDSCAPE
+        mainRoot.orientation = if (landscape) LinearLayout.HORIZONTAL else LinearLayout.VERTICAL
+        headerView.visibility = if (landscape) View.GONE else View.VISIBLE
+        mainRoot.removeView(previewContainer)
+        mainRoot.removeView(controlsPanel)
+        if (landscape) {
+            mainRoot.addView(previewContainer, LinearLayout.LayoutParams(0, -1, 1f))
+            mainRoot.addView(controlsPanel, LinearLayout.LayoutParams(
+                (resources.displayMetrics.density * 300f).toInt(), -1))
+            controlsPanel.setPadding(8, 2, 8, 2)
+        } else {
+            mainRoot.addView(previewContainer, LinearLayout.LayoutParams(-1, 0, 1f))
+            mainRoot.addView(controlsPanel, LinearLayout.LayoutParams(-1, -2))
+            controlsPanel.setPadding(14, 10, 14, 12)
+        }
+        previewContainer.requestLayout()
+        previewContainer.post { updatePreview() }
+    }
+
     private fun updatePreview() {
         if (!::preview.isInitialized || !preview.isAvailable) return
         val w = preview.width.toFloat()
@@ -508,7 +536,11 @@ class MainActivity : Activity() {
         // instead of centre-cropping to fill the available screen area.
         val base = if (frontFacing) (sensorDegrees + displayDegrees()) % 360
                    else (sensorDegrees - displayDegrees() + 360) % 360
-        val degrees = (base + rotationAdjustment) % 360
+        val landscape = resources.configuration.orientation == Configuration.ORIENTATION_LANDSCAPE
+        val requested = (base + rotationAdjustment) % 360
+        val degrees = if (landscape && requested % 180 != 0) (requested + 90) % 360
+                      else if (!landscape && requested % 180 == 0) (requested + 90) % 360
+                      else requested
         lastPreviewRotation = degrees
         val rotated = degrees == 90 || degrees == 270
         val holderW = previewContainer.width
@@ -556,6 +588,7 @@ class MainActivity : Activity() {
         // have been measured. Reset the old landscape transform and wait for
         // the view hierarchy to finish its new layout before fitting again.
         preview.setTransform(Matrix())
+        applyOrientationLayout()
         previewContainer.requestLayout()
         previewContainer.post {
             preview.post { updatePreview() }
