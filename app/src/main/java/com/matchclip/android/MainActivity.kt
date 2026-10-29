@@ -373,7 +373,7 @@ class MainActivity : Activity() {
             encoder!!.start()
             running.set(true)
             drainThread = Thread({ drainEncoder() }, "EncoderDrain").also { it.start() }
-            val id = cameraIds[lenses.selectedItemPosition.coerceIn(cameraIds.indices)]
+            val id = cameraIds.first()
             cameraId = id
             val characteristics = manager.getCameraCharacteristics(id)
             sensorDegrees = characteristics.get(CameraCharacteristics.SENSOR_ORIENTATION) ?: 90
