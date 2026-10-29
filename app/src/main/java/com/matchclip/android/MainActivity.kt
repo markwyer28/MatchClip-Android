@@ -514,7 +514,7 @@ class MainActivity : Activity() {
         if (landscape) {
             mainRoot.addView(previewContainer, LinearLayout.LayoutParams(0, -1, 1f))
             mainRoot.addView(controlsPanel, LinearLayout.LayoutParams(
-                (resources.displayMetrics.density * 300f).toInt(), -1))
+                (resources.displayMetrics.density * 220f).toInt(), -1))
             controlsPanel.setPadding(8, 2, 8, 2)
         } else {
             mainRoot.addView(previewContainer, LinearLayout.LayoutParams(-1, 0, 1f))
@@ -558,24 +558,20 @@ class MainActivity : Activity() {
                 return
             }
         }
-        val frameW = if (rotated) 720f else 1280f
-        val frameH = if (rotated) 1280f else 720f
-        val fitScale = minOf(w / frameW, h / frameH)
-        val targetW = frameW * fitScale
-        val targetH = frameH * fitScale
-
-        // TextureView transforms operate in view coordinates. The view starts
-        // with its source stretched to its own bounds, so undo that stretch,
-        // rotate, then fit the entire frame within the available rectangle.
+        // A centre-fitted, aspect-preserving transform. The preview is never
+        // stretched or centre-cropped: all four recorded frame edges remain
+        // visible even as the device or manual rotation changes.
+        val sourceW = 1280f
+        val sourceH = 720f
+        val orientedW = if (rotated) sourceH else sourceW
+        val orientedH = if (rotated) sourceW else sourceH
+        val fit = minOf(w / orientedW, h / orientedH)
         val cx = w / 2f
         val cy = h / 2f
         val transform = Matrix()
-        val sourceW = 1280f
-        val sourceH = 720f
         transform.setScale(sourceW / w, sourceH / h, cx, cy)
         transform.postRotate(degrees.toFloat(), cx, cy)
-        val outputScale = if (rotated) targetW / sourceH else targetW / sourceW
-        transform.postScale(outputScale, outputScale, cx, cy)
+        transform.postScale(fit, fit, cx, cy)
         if (frontFacing) transform.postScale(-1f, 1f, cx, cy)
         preview.setTransform(transform)
     }
