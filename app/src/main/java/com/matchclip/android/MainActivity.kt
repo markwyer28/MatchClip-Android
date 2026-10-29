@@ -146,7 +146,7 @@ class MainActivity : Activity() {
         }
 
         val liveTag = TextView(this).apply {
-            text = "MATCHCLIP  •  16:9"; textSize = 12f
+            text = "BOHSCAM  •  16:9"; textSize = 12f
             setTextColor(Color.WHITE); setPadding(dp(12), dp(8), dp(12), dp(8))
             background = rounded(Color.rgb(37, 48, 66), 10f)
         }
@@ -525,9 +525,9 @@ class MainActivity : Activity() {
                 val segment = snapshot.drop(startIndex).takeWhile { it.pts <= h.target + h.after * 1_000_000L }
                 if (segment.isEmpty()) throw IllegalStateException("Empty clip")
                 val values = ContentValues().apply {
-                    put(MediaStore.Video.Media.DISPLAY_NAME, "MatchClip_${h.tag}_${System.currentTimeMillis()}_${h.number}.mp4")
+                    put(MediaStore.Video.Media.DISPLAY_NAME, "BohsCam_${h.tag}_${System.currentTimeMillis()}_${h.number}.mp4")
                     put(MediaStore.Video.Media.MIME_TYPE, "video/mp4")
-                    put(MediaStore.Video.Media.RELATIVE_PATH, "Movies/MatchClip")
+                    put(MediaStore.Video.Media.RELATIVE_PATH, "Movies/BohsCam")
                     put(MediaStore.Video.Media.IS_PENDING, 1)
                 }
                 val uri = contentResolver.insert(MediaStore.Video.Media.EXTERNAL_CONTENT_URI, values)
@@ -550,7 +550,7 @@ class MainActivity : Activity() {
                         } finally { muxer.release() }
                     }
                     contentResolver.update(uri, ContentValues().apply { put(MediaStore.Video.Media.IS_PENDING, 0) }, null, null)
-                    message("Saved highlight ${h.number} in Movies/MatchClip")
+                    message("Saved highlight ${h.number} in Movies/BohsCam")
                 } catch (e: Exception) { contentResolver.delete(uri, null, null); throw e }
             } catch (e: Exception) { message("Save failed: ${e.message}") }
         }, "SaveHighlight${h.number}").start()
@@ -565,7 +565,7 @@ class MainActivity : Activity() {
         try { encoder?.stop(); encoder?.release(); encoderSurface?.release() } catch (_: Exception) {}
         encoder = null; encoderSurface = null
         val lost = synchronized(guard) { val n = pending.size; pending.clear(); n }
-        message(if (lost > 0) "Stopped; $lost pending clips lost. Wait for saving to finish." else "Stopped · clips in Movies/MatchClip")
+        message(if (lost > 0) "Stopped; $lost pending clips lost. Wait for saving to finish." else "Stopped · clips in Movies/BohsCam")
         preview.post { if (preview.isAvailable) {
             if (camera != null) createCameraSession(record = false) else openPreviewCamera()
         } }
