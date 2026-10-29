@@ -35,6 +35,7 @@ class MainActivity : Activity() {
     private var activeBuilder: CaptureRequest.Builder? = null
     private var cameraId: String? = null
     private var sensorDegrees = 90
+    private var frontFacing = false
     private var clipOrientation = 90
     private lateinit var startButton: Button
     private lateinit var markButton: Button
@@ -84,11 +85,27 @@ class MainActivity : Activity() {
             setTextColor(Color.WHITE); this.background = rounded(background, 14f)
             setPadding(14, 4, 14, 4)
         }
+        val density = resources.displayMetrics.density
+        fun dp(value: Int) = (value * density + 0.5f).toInt()
         val root = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             setBackgroundColor(navy)
-            setPadding(12, 10, 12, 12)
+            setPadding(dp(12), dp(10), dp(12), dp(12))
         }
+        // Apply real system-bar insets: Android 15+ may draw edge-to-edge,
+        // otherwise the title and recording controls overlap system UI.
+        root.setOnApplyWindowInsetsListener { view, insets ->
+            val bars = if (Build.VERSION.SDK_INT >= 30)
+                insets.getInsets(android.view.WindowInsets.Type.systemBars())
+            else null
+            val top = bars?.top ?: insets.systemWindowInsetTop
+            val bottom = bars?.bottom ?: insets.systemWindowInsetBottom
+            val left = bars?.left ?: insets.systemWindowInsetLeft
+            val right = bars?.right ?: insets.systemWindowInsetRight
+            view.setPadding(dp(12) + left, dp(10) + top, dp(12) + right, dp(12) + bottom)
+            insets
+        }
+        root.requestApplyInsets()
         val header = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(8, 2, 8, 10) }
         header.addView(TextView(this).apply {
             text = "MATCHCLIP"; textSize = 22f; setTextColor(Color.WHITE)
@@ -198,14 +215,21 @@ class MainActivity : Activity() {
     private fun listCameras() {
         if (checkSelfPermission(Manifest.permission.CAMERA) != PackageManager.PERMISSION_GRANTED) return
         cameraIds = manager.cameraIdList.filter {
-            manager.getCameraCharacteristics(it).get(CameraCharacteristics.LENS_FACING) == CameraCharacteristics.LENS_FACING_BACK
-        }.sortedBy {
+            val facing = manager.getCameraCharacteristics(it).get(CameraCharacteristics.LENS_FACING)
+            facing == CameraCharacteristics.LENS_FACING_BACK ||
+                facing == CameraCharacteristics.LENS_FACING_FRONT
+        }.sortedWith(compareBy<String> {
+            if (manager.getCameraCharacteristics(it).get(CameraCharacteristics.LENS_FACING) ==
+                CameraCharacteristics.LENS_FACING_BACK) 0 else 1
+        }.thenBy {
             manager.getCameraCharacteristics(it).get(CameraCharacteristics.LENS_INFO_AVAILABLE_FOCAL_LENGTHS)?.minOrNull() ?: 100f
-        }
+        })
         val names = cameraIds.mapIndexed { index, id ->
-            val focal = manager.getCameraCharacteristics(id).get(CameraCharacteristics.LENS_INFO_AVAILABLE_FOCAL_LENGTHS)?.minOrNull()
-            val name = if (index == 0) "Wide / ultra-wide" else "Rear camera ${index + 1}"
-            "$name  ·  ${focal ?: "?"} mm  (ID $id)"
+            val characteristics = manager.getCameraCharacteristics(id)
+            val focal = characteristics.get(CameraCharacteristics.LENS_INFO_AVAILABLE_FOCAL_LENGTHS)?.minOrNull()
+            val facing = characteristics.get(CameraCharacteristics.LENS_FACING)
+            val label = if (facing == CameraCharacteristics.LENS_FACING_FRONT) "Front / selfie" else "Rear camera"
+            "$label · ${focal ?: "?"} mm · ID $id"
         }
         runOnUiThread { lenses.adapter = ArrayAdapter(this, android.R.layout.simple_spinner_dropdown_item, names) }
     }
@@ -230,7 +254,16 @@ class MainActivity : Activity() {
         if (cameraId == id && camera != null && session != null) return
         closeCameraPreview()
         cameraId = id
-        sensorDegrees = manager.getCameraCharacteristics(id).get(CameraCharacteristics.SENSOR_ORIENTATION) ?: 90
+        val characteristics = manager.getCameraCharacteristics(id)
+        sensorDegrees = characteristics.get(CameraCharacteristics.SENSOR_ORIENTATION) ?: 90
+        frontFacing = characteristics.get(CameraCharacteristics.LENS_FACING) == CameraCharacteristics.LENS_FACING_FRONT
+        torchOn = false
+        runOnUiThread {
+            torch.text = "Torch off"
+            torch.isEnabled = characteristics.get(CameraCharacteristics.FLASH_INFO_AVAILABLE) == true
+            zoom.progress = 0
+        }
+        zoomValue = characteristics.get(CameraCharacteristics.CONTROL_ZOOM_RATIO_RANGE)?.lower ?: 1f
         updatePreview()
         val generation = cameraGeneration
         openingCamera = true
@@ -319,8 +352,11 @@ class MainActivity : Activity() {
             drainThread = Thread({ drainEncoder() }, "EncoderDrain").also { it.start() }
             val id = cameraIds[lenses.selectedItemPosition.coerceIn(cameraIds.indices)]
             cameraId = id
-            sensorDegrees = manager.getCameraCharacteristics(id).get(CameraCharacteristics.SENSOR_ORIENTATION) ?: 90
-            clipOrientation = (sensorDegrees - displayDegrees() + 360) % 360
+            val characteristics = manager.getCameraCharacteristics(id)
+            sensorDegrees = characteristics.get(CameraCharacteristics.SENSOR_ORIENTATION) ?: 90
+            frontFacing = characteristics.get(CameraCharacteristics.LENS_FACING) == CameraCharacteristics.LENS_FACING_FRONT
+            clipOrientation = if (frontFacing) (sensorDegrees + displayDegrees()) % 360
+                else (sensorDegrees - displayDegrees() + 360) % 360
             updatePreview()
             if (camera != null && cameraId == id) {
                 createCameraSession(record = true)
@@ -466,7 +502,7 @@ class MainActivity : Activity() {
         // to the sensor orientation AND the current display orientation.
         // Compute the transform from the actual 1280x720 buffer dimensions,
         // not from dimensions already swapped for rotation.
-        val degrees = (sensorDegrees - displayDegrees() + 360) % 360
+        val degrees = if (frontFacing) (sensorDegrees + displayDegrees()) % 360 else (sensorDegrees - displayDegrees() + 360) % 360
         val centerX = width / 2f
         val centerY = height / 2f
         val rotated = degrees == 90 || degrees == 270
@@ -479,6 +515,7 @@ class MainActivity : Activity() {
         transform.postScale(1280f / width, 720f / height, centerX, centerY)
         transform.postRotate(degrees.toFloat(), centerX, centerY)
         transform.postScale(scale * width / 1280f, scale * height / 720f, centerX, centerY)
+        if (frontFacing) transform.postScale(-1f, 1f, centerX, centerY)
         preview.setTransform(transform)
     }
 
