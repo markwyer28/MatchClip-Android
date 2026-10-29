@@ -536,11 +536,9 @@ class MainActivity : Activity() {
         // instead of centre-cropping to fill the available screen area.
         val base = if (frontFacing) (sensorDegrees + displayDegrees()) % 360
                    else (sensorDegrees - displayDegrees() + 360) % 360
-        val landscape = resources.configuration.orientation == Configuration.ORIENTATION_LANDSCAPE
-        val requested = (base + rotationAdjustment) % 360
-        val degrees = if (landscape && requested % 180 != 0) (requested + 90) % 360
-                      else if (!landscape && requested % 180 == 0) (requested + 90) % 360
-                      else requested
+        // Respect the user's manual 90-degree rotation in every orientation.
+        // The previous landscape/portrait coercion cancelled button presses.
+        val degrees = (base + rotationAdjustment) % 360
         lastPreviewRotation = degrees
         val rotated = degrees == 90 || degrees == 270
         val holderW = previewContainer.width
